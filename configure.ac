@@ -221,6 +221,7 @@ fi
 
 AC_CONFIG_FILES([
 	Makefile
+	util/Makefile
 	src/Makefile
 	src/FFT/Makefile
 	src/GaussianNoise/Makefile

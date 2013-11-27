@@ -1,2 +1,8 @@
 SUBDIRS = \
-	matmul
+	FFT \
+	GaussianNoise \
+	JuliaFractal \
+	MatMul \
+	NBody \
+	RayTracer \
+	VecAdd

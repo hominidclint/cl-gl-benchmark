@@ -222,7 +222,13 @@ fi
 AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
-	src/matmul/Makefile
+	src/FFT/Makefile
+	src/GaussianNoise/Makefile
+	src/JuliaFractal/Makefile
+	src/MatMul/Makefile
+	src/NBody/Makefile
+	src/RayTracer/Makefile
+	src/VecAdd/Makefile
 ])
 
 AC_OUTPUT()

@@ -511,7 +511,7 @@ int
 NBody::initialize()
 {
     // Call base class Initialize to get default configuration
-    int status = 0;
+    // int status = 0;
     if (this->SDKSample::initialize() != SDK_SUCCESS)
         return SDK_FAILURE;
 
@@ -690,7 +690,11 @@ NBody::run()
                 return SDK_FAILURE;
         }
 
-		status = clFinish(this->commandQueue);
+        status = clFinish(this->commandQueue);
+        if (status)
+        {
+            // dummy code to mute compiler error
+        }
         sampleCommon->stopTimer(timer);
         // Compute kernel time
         kernelTime = (double)(sampleCommon->readTimer(timer)) / iterations;

@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "MatMul.h"
+#include "MatMul.hpp"
 
 int main(int argc, char const *argv[])
 {

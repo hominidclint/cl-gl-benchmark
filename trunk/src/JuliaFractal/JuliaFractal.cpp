@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "JuliaFractal.h"
+#include "JuliaFractal.hpp"
 
 int main(int argc, char const *argv[])
 {

@@ -1,10 +1,10 @@
 /**********************************************************************
-Copyright ©2012 Advanced Micro Devices, Inc. All rights reserved.
+Copyright ©2013 Advanced Micro Devices, Inc. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
-•	Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-•	Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
+•   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+•   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
  other materials provided with the distribution.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -38,31 +38,14 @@ int
 NBody::setupNBody()
 {
     // make sure numParticles is multiple of group size
-    numParticles = (cl_int)(((size_t)numParticles 
-        < groupSize) ? groupSize : numParticles);
+    numParticles = (cl_int)(((size_t)numParticles < groupSize) ? groupSize :
+                            numParticles);
     numParticles = (cl_int)((numParticles / groupSize) * groupSize);
 
     numBodies = numParticles;
 
     initPos = (cl_float*)malloc(numBodies * sizeof(cl_float4));
     CHECK_ALLOCATION(initPos, "Failed to allocate host memory. (initPos)");
-
-    initVel = (cl_float*)malloc(numBodies * sizeof(cl_float4));
-    CHECK_ALLOCATION(initVel, "Failed to allocate host memory. (initVel)");
-
-#if defined (_WIN32)
-    pos = (cl_float*)_aligned_malloc(numBodies * sizeof(cl_float4), 16);
-#else
-    pos = (cl_float*)memalign(16, numBodies * sizeof(cl_float4));
-#endif
-    CHECK_ALLOCATION(pos, "Failed to allocate host memory. (pos)");
-
-#if defined (_WIN32)
-    vel = (cl_float*)_aligned_malloc(numBodies * sizeof(cl_float4), 16);
-#else
-    vel = (cl_float*)memalign(16, numBodies * sizeof(cl_float4));
-#endif
-    CHECK_ALLOCATION(vel, "Failed to allocate host memory. (vel)");
 
     // initialization of inputs
     for(int i = 0; i < numBodies; ++i)
@@ -77,34 +60,23 @@ NBody::setupNBody()
 
         // Mass value
         initPos[index + 3] = random(1, 1000);
-
-        // First 3 values are velocity in x,y and z direction
-        for(int j = 0; j < 3; ++j)
-        {
-            initVel[index + j] = 0.0f;
-        }
-
-        // unused
-        initVel[3] = 0.0f;
     }
-
-    memcpy(pos, initPos, 4 * numBodies * sizeof(cl_float));
-    memcpy(vel, initVel, 4 * numBodies * sizeof(cl_float));
-
     return SDK_SUCCESS;
 }
 
-int 
+int
 NBody::genBinaryImage()
 {
-    streamsdk::bifData binaryData;
+    bifData binaryData;
     binaryData.kernelName = std::string("NBody_Kernels.cl");
     binaryData.flagsStr = std::string("");
-    if(isComplierFlagsSpecified())
-        binaryData.flagsFileName = std::string(flags.c_str());
+    if(sampleArgs->isComplierFlagsSpecified())
+    {
+        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
+    }
 
-    binaryData.binaryName = std::string(dumpBinary.c_str());
-    int status = sampleCommon->generateBinaryImage(binaryData);
+    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
+    int status = generateBinaryImage(binaryData);
     return status;
 }
 
@@ -113,18 +85,17 @@ int
 NBody::setupCL()
 {
     cl_int status = CL_SUCCESS;
-    cl_event writeEvt1,writeEvt2;
 
     cl_device_type dType;
 
-    if(deviceType.compare("cpu") == 0)
+    if(sampleArgs->deviceType.compare("cpu") == 0)
     {
         dType = CL_DEVICE_TYPE_CPU;
     }
-    else //deviceType = "gpu" 
+    else //deviceType = "gpu"
     {
         dType = CL_DEVICE_TYPE_GPU;
-        if(isThereGPU() == false)
+        if(sampleArgs->isThereGPU() == false)
         {
             std::cout << "GPU not found. Falling back to CPU device" << std::endl;
             dType = CL_DEVICE_TYPE_CPU;
@@ -136,21 +107,22 @@ NBody::setupCL()
      * the AMD one if available or a reasonable default.
      */
     cl_platform_id platform = NULL;
-    int retValue = sampleCommon->getPlatform(platform, platformId, isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "sampleCommon::getPlatform() failed");
+    int retValue = getPlatform(platform, sampleArgs->platformId,
+                               sampleArgs->isPlatformEnabled());
+    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
 
     // Display available devices.
-    retValue = sampleCommon->displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "sampleCommon::displayDevices() failed");
+    retValue = displayDevices(platform, dType);
+    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
 
 
     /*
      * If we could find our platform, use it. Otherwise use just available platform.
      */
-    cl_context_properties cps[3] = 
+    cl_context_properties cps[3] =
     {
-        CL_CONTEXT_PLATFORM, 
-        (cl_context_properties)platform, 
+        CL_CONTEXT_PLATFORM,
+        (cl_context_properties)platform,
         0
     };
 
@@ -163,313 +135,192 @@ NBody::setupCL()
     CHECK_OPENCL_ERROR( status, "clCreateContextFromType failed.");
 
     // getting device on which to run the sample
-    status = sampleCommon->getDevices(context, &devices, deviceId, isDeviceIdEnabled());
-    CHECK_ERROR(status, SDK_SUCCESS, "sampleCommon::getDevices() failed");
+    status = getDevices(context, &devices, sampleArgs->deviceId,
+                        sampleArgs->isDeviceIdEnabled());
+    CHECK_ERROR(status, SDK_SUCCESS, "getDevices() failed");
 
     {
         // The block is to move the declaration of prop closer to its use
         cl_command_queue_properties prop = 0;
         commandQueue = clCreateCommandQueue(
-                context, 
-                devices[deviceId], 
-                prop, 
-                &status);
+                           context,
+                           devices[sampleArgs->deviceId],
+                           prop,
+                           &status);
         CHECK_OPENCL_ERROR( status, "clCreateCommandQueue failed.");
     }
 
     //Set device info of given cl_device_id
-    retValue = deviceInfo.setDeviceInfo(devices[deviceId]);
+    retValue = deviceInfo.setDeviceInfo(devices[sampleArgs->deviceId]);
     CHECK_ERROR(retValue, SDK_SUCCESS, "SDKDeviceInfo::setDeviceInfo() failed");
 
     /*
     * Create and initialize memory objects
     */
-
-    // Create memory objects for position
-    currPos = clCreateBuffer(
-        context,
-        CL_MEM_READ_WRITE,
-        numBodies * sizeof(cl_float4),
-        0,
-        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (oldPos)");
+    size_t bufferSize = numBodies * sizeof(cl_float4);
+    for (int i = 0; i < 2; i++)
+    {
+        particlePos[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, 0,
+                                        &status);
+        CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (particlePos)");
+        particleVel[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, 0,
+                                        &status);
+        CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (particleVel)");
+    }
 
     // Initialize position buffer
-    status = clEnqueueWriteBuffer(commandQueue,
-                                  currPos,
-                                  CL_FALSE,
-                                  0,
-                                  numBodies * sizeof(cl_float4),
-                                  pos,
-                                  0,
-                                  0,
-                                  &writeEvt1);
+    status = clEnqueueWriteBuffer(commandQueue,particlePos[0],CL_TRUE,0,bufferSize,
+                                  initPos,0,0,NULL);
     CHECK_OPENCL_ERROR(status, "clEnqueueWriteBuffer failed. ");
 
-
-    // Create memory objects for position
-    newPos = clCreateBuffer(
-        context,
-        CL_MEM_READ_WRITE,
-        numBodies * sizeof(cl_float4),
-        0,
-        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (newPos)");
-
-    // Create memory objects for velocity
-    currVel = clCreateBuffer(
-        context,
-        CL_MEM_READ_WRITE,
-        numBodies * sizeof(cl_float4),
-        0,
-        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (oldVel)");
-
-    // Initialize velocity buffer
-    status = clEnqueueWriteBuffer(commandQueue,
-                                  currVel,
-                                  CL_FALSE,
-                                  0,
-                                  numBodies * sizeof(cl_float4),
-                                  vel,
-                                  0,
-                                  0,
-                                  &writeEvt2);
-    CHECK_OPENCL_ERROR(status, "clEnqueueWriteBuffer failed. ");
+    // Initialize the velocity buffer to zero
+    float* p = (float*) clEnqueueMapBuffer(commandQueue, particleVel[0], CL_TRUE,
+                                           CL_MAP_WRITE
+                                           , 0, bufferSize, 0, NULL, NULL, &status);
+    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. ");
+    memset(p, 0, bufferSize);
+    status = clEnqueueUnmapMemObject(commandQueue, particleVel[0], p, 0, NULL,
+                                     NULL);
+    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. ");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed. ");
 
-    // Create memory objects for velocity
-    newVel = clCreateBuffer(
-        context,
-        CL_MEM_READ_WRITE,
-        numBodies * sizeof(cl_float4),
-        0,
-        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (newVel)");
-
-    // create a CL program using the kernel source 
-    streamsdk::buildProgramData buildData;
+    // create a CL program using the kernel source
+    buildProgramData buildData;
     buildData.kernelName = std::string("NBody_Kernels.cl");
     buildData.devices = devices;
-    buildData.deviceId = deviceId;
+    buildData.deviceId = sampleArgs->deviceId;
     buildData.flagsStr = std::string("");
-    if(isLoadBinaryEnabled())
-        buildData.binaryName = std::string(loadBinary.c_str());
+    if(sampleArgs->isLoadBinaryEnabled())
+    {
+        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
+    }
 
-    if(isComplierFlagsSpecified())
-        buildData.flagsFileName = std::string(flags.c_str());
+    if(sampleArgs->isComplierFlagsSpecified())
+    {
+        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
+    }
 
-    retValue = sampleCommon->buildOpenCLProgram(program, context, buildData);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "sampleCommon::buildOpenCLProgram() failed");
+    retValue = buildOpenCLProgram(program, context, buildData);
+    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
 
     // get a kernel object handle for a kernel with the given name
-    kernel = clCreateKernel(
-        program,
-        "nbody_sim",
-        &status);
+    kernel = clCreateKernel(program,"nbody_sim",&status);
     CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
-
-    status = sampleCommon->waitForEventAndRelease(&writeEvt1);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(writeEvt1) Failed");
-
-    status = sampleCommon->waitForEventAndRelease(&writeEvt2);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(writeEvt2) Failed");
 
     return SDK_SUCCESS;
 }
 
 
-int 
+int
 NBody::setupCLKernels()
 {
     cl_int status;
 
     // Set appropriate arguments to the kernel
 
-    // Particle positions
-    status = clSetKernelArg(
-        kernel,
-        0,
-        sizeof(cl_mem),
-        (void*)&currPos);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedPos)");
-
-    // Particle velocity
-    status = clSetKernelArg(
-        kernel,
-        1,
-        sizeof(cl_mem),
-        (void *)&currVel);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedVel)");
-
     // numBodies
     status = clSetKernelArg(
-        kernel,
-        2,
-        sizeof(cl_int),
-        (void *)&numBodies);
+                 kernel,
+                 2,
+                 sizeof(cl_int),
+                 (void *)&numBodies);
     CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (numBodies)");
 
     // time step
     status = clSetKernelArg(
-        kernel,
-        3,
-        sizeof(cl_float),
-        (void *)&delT);
+                 kernel,
+                 3,
+                 sizeof(cl_float),
+                 (void *)&delT);
     CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (delT)");
 
     // upward Pseudoprobability
     status = clSetKernelArg(
-        kernel,
-        4,
-        sizeof(cl_float),
-        (void *)&espSqr);
+                 kernel,
+                 4,
+                 sizeof(cl_float),
+                 (void *)&espSqr);
     CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (espSqr)");
 
-    // local memory
-    status = clSetKernelArg(
-        kernel,
-        5,
-        GROUP_SIZE * 4 * sizeof(float),
-        NULL);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (localPos)");
-
-    // Particle positions
-    status = clSetKernelArg(
-        kernel,
-        6,
-        sizeof(cl_mem),
-        (void*)&newPos);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (unewPos)");
-
-    // Particle velocity
-    status = clSetKernelArg(
-        kernel,
-        7,
-        sizeof(cl_mem),
-        (void *)&newVel);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (newVel)");
-
-    status = kernelInfo.setKernelWorkGroupInfo(kernel, devices[deviceId]);
-    CHECK_ERROR(status, SDK_SUCCESS, "kernelInfo.setKernelWorkGroupInfo() failed");
-
-    if(kernelInfo.localMemoryUsed > deviceInfo.localMemSize)
-    {
-        std::cout << "Unsupported: Insufficient local memory on device" <<
-            std::endl;
-        return SDK_FAILURE;
-    }
-
-    if(groupSize > kernelInfo.kernelWorkGroupSize)
-    {
-        if(!quiet)
-        {
-            std::cout << "Out of Resources!" << std::endl;
-            std::cout << "Group Size specified : " << groupSize << std::endl;
-            std::cout << "Max Group Size supported on the kernel : "
-                      << kernelInfo.kernelWorkGroupSize << std::endl;
-            std::cout << "Falling back to " << kernelInfo.kernelWorkGroupSize << std::endl;
-        }
-        groupSize = kernelInfo.kernelWorkGroupSize;
-    }
 
     return SDK_SUCCESS;
 }
 
-int 
-NBody::runCLKernels()
+
+int NBody::runCLKernels()
 {
     cl_int status;
 
-    /* 
+    int currentBuffer = currentPosBufferIndex;
+    int nextBuffer = (currentPosBufferIndex+1)%2;
+
+    /*
     * Enqueue a kernel run call.
     */
     size_t globalThreads[] = {numBodies};
     size_t localThreads[] = {groupSize};
 
-    if(localThreads[0] > deviceInfo.maxWorkItemSizes[0] ||
-       localThreads[0] > deviceInfo.maxWorkGroupSize)
-    {
-        std::cout << "Unsupported: Device"
-            "does not support requested number of work items.";
-        return SDK_FAILURE;
-    }
+    // Particle positions
+    status = clSetKernelArg(kernel,0,sizeof(cl_mem),
+                            (void*) (particlePos+currentBuffer));
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedPos)");
 
-    status = clEnqueueNDRangeKernel(
-        commandQueue,
-        kernel,
-        1,
-        NULL,
-        globalThreads,
-        localThreads,
-        0,
-        NULL,
-        NULL);
+    // Particle velocity
+    status = clSetKernelArg(kernel,1,sizeof(cl_mem),
+                            (void *) (particleVel+currentBuffer));
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedVel)");
+
+    // Particle positions
+    status = clSetKernelArg(kernel,5,sizeof(cl_mem),
+                            (void*) (particlePos+nextBuffer));
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (unewPos)");
+
+    // Particle velocity
+    status = clSetKernelArg(kernel,6,sizeof(cl_mem),
+                            (void*) (particleVel+nextBuffer));
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (newVel)");
+
+    status = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,globalThreads,
+                                    localThreads,0,NULL,NULL);
     CHECK_OPENCL_ERROR(status, "clEnqueueNDRangeKernel failed.");
-
-    // Read data for verification or display
-    status = clEnqueueReadBuffer(
-        commandQueue,
-        exchange ? currPos : newPos,
-        CL_FALSE,
-        0,
-        numBodies* sizeof(cl_float4),
-        pos,
-        0,
-        NULL,
-        &this->glEvent);
-    CHECK_OPENCL_ERROR(status, "clEnqueueReadBuffer failed.");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    /* Set inputs as output and outputs as inputs 
-     to avoid explicit copy*/
-
-    // Particle positions
-    status = clSetKernelArg(
-        kernel,
-        exchange ? 6 : 0,
-        sizeof(cl_mem),
-        (void*)&currPos);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedPos)");
-
-    // Particle velocity 
-    status = clSetKernelArg(
-        kernel,
-        exchange ? 7 : 1,
-        sizeof(cl_mem),
-        (void *)&currVel);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedVel)");
-
-    // Particle positions
-    status = clSetKernelArg(
-        kernel,
-        exchange ? 0 : 6,
-        sizeof(cl_mem),
-        (void*)&newPos);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedPos)");
-
-    // Particle velocity
-    status = clSetKernelArg(
-        kernel,
-        exchange ? 1 : 7,
-        sizeof(cl_mem),
-        (void *)&newVel);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedVel)");
-
-    exchange = exchange ? false : true;
-
+    currentPosBufferIndex = nextBuffer;
+    timerNumFrames++;
     return SDK_SUCCESS;
+}
+
+float* NBody::getMappedParticlePositions()
+{
+    cl_int status;
+    mappedPosBufferIndex = currentPosBufferIndex;
+    mappedPosBuffer = (float*) clEnqueueMapBuffer(commandQueue,
+                      particlePos[mappedPosBufferIndex], CL_TRUE, CL_MAP_READ
+                      , 0, numBodies*4*sizeof(float), 0, NULL, NULL, &status);
+    return mappedPosBuffer;
+}
+
+void NBody::releaseMappedParticlePositions()
+{
+    if (mappedPosBuffer)
+    {
+        cl_int status = clEnqueueUnmapMemObject(commandQueue,
+                                                particlePos[mappedPosBufferIndex], mappedPosBuffer, 0, NULL, NULL);
+        mappedPosBuffer = NULL;
+        clFlush(commandQueue);
+    }
 }
 
 /*
 * n-body simulation on cpu
 */
-void 
-NBody::nBodyCPUReference()
+void
+NBody::nBodyCPUReference(float* currentPos, float* currentVel, float* newPos,
+                         float* newVel)
 {
     //Iterate for all samples
     for(int i = 0; i < numBodies; ++i)
@@ -484,14 +335,14 @@ NBody::nBodyCPUReference()
             float distSqr = 0.0f;
             for(int k = 0; k < 3; ++k)
             {
-                r[k] = refPos[index + k] - refPos[myIndex + k];
+                r[k] = currentPos[index + k] - currentPos[myIndex + k];
 
                 distSqr += r[k] * r[k];
             }
 
             float invDist = 1.0f / sqrt(distSqr + espSqr);
             float invDistCube =  invDist * invDist * invDist;
-            float s = refPos[index + 3] * invDistCube;
+            float s = currentPos[index + 3] * invDistCube;
 
             for(int k = 0; k < 3; ++k)
             {
@@ -501,9 +352,11 @@ NBody::nBodyCPUReference()
 
         for(int k = 0; k < 3; ++k)
         {
-            refPos[myIndex + k] += refVel[myIndex + k] * delT + 0.5f * acc[k] * delT * delT;
-            refVel[myIndex + k] += acc[k] * delT;
+            newPos[myIndex + k] = currentPos[myIndex + k] + currentVel[myIndex + k] * delT +
+                                  0.5f * acc[k] * delT * delT;
+            newVel[myIndex + k] = currentVel[myIndex + k] + acc[k] * delT;
         }
+        newPos[myIndex+3] = currentPos[myIndex + 3];
     }
 }
 
@@ -511,29 +364,33 @@ int
 NBody::initialize()
 {
     // Call base class Initialize to get default configuration
-    // int status = 0;
-    if (this->SDKSample::initialize() != SDK_SUCCESS)
+    int status = 0;
+    if (sampleArgs->initialize() != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    streamsdk::Option *num_particles = new streamsdk::Option;
-    CHECK_ALLOCATION(num_particles, "error. Failed to allocate memory (num_particles)\n");
+    Option *num_particles = new Option;
+    CHECK_ALLOCATION(num_particles,
+                     "error. Failed to allocate memory (num_particles)\n");
 
     num_particles->_sVersion = "x";
     num_particles->_lVersion = "particles";
     num_particles->_description = "Number of particles";
-    num_particles->_type = streamsdk::CA_ARG_INT;
+    num_particles->_type = CA_ARG_INT;
     num_particles->_value = &numParticles;
 
     sampleArgs->AddOption(num_particles);
     delete num_particles;
 
-    streamsdk::Option *num_iterations = new streamsdk::Option;
-    CHECK_ALLOCATION(num_iterations, "error. Failed to allocate memory (num_iterations)\n");
+    Option *num_iterations = new Option;
+    CHECK_ALLOCATION(num_iterations,
+                     "error. Failed to allocate memory (num_iterations)\n");
 
     num_iterations->_sVersion = "i";
     num_iterations->_lVersion = "iterations";
     num_iterations->_description = "Number of iterations";
-    num_iterations->_type = streamsdk::CA_ARG_INT;
+    num_iterations->_type = CA_ARG_INT;
     num_iterations->_value = &iterations;
 
     sampleArgs->AddOption(num_iterations);
@@ -547,54 +404,58 @@ NBody::setup()
 {
     int status = 0;
     if(setupNBody() != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    int timer = sampleCommon->createTimer();
-    sampleCommon->resetTimer(timer);
-    sampleCommon->startTimer(timer);
+    int timer = sampleTimer->createTimer();
+    sampleTimer->resetTimer(timer);
+    sampleTimer->startTimer(timer);
 
     status = setupCL();
     if(status != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    sampleCommon->stopTimer(timer);
+    sampleTimer->stopTimer(timer);
     // Compute setup time
-    setupTime = (double)(sampleCommon->readTimer(timer));
+    setupTime = (double)(sampleTimer->readTimer(timer));
 
-    display = !quiet && !verify;
+    display = !sampleArgs->quiet && !sampleArgs->verify;
 
     return SDK_SUCCESS;
 }
 
-/** 
-* @brief Initialize GL 
+/**
+* @brief Initialize GL
 */
-void 
+void
 GLInit()
 {
     glClearColor(0.0 ,0.0, 0.0, 0.0);
     glClear(GL_COLOR_BUFFER_BIT);
     glClear(GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_PROJECTION);	
+    glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
 }
 
-/** 
+/**
 * @brief Glut Idle function
 */
-void 
+void
 idle()
 {
     glutPostRedisplay();
 }
 
-/** 
+/**
 * @brief Glut reshape func
-* 
+*
 * @param w numParticles of OpenGL window
-* @param h height of OpenGL window 
+* @param h height of OpenGL window
 */
-void 
+void
 reShape(int w,int h)
 {
     glViewport(0, 0, w, h);
@@ -606,11 +467,13 @@ reShape(int w,int h)
     gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
 }
 
-/** 
+/**
 * @brief OpenGL display function
 */
 void displayfunc()
 {
+    static int numFrames = 0;
+
     glClearColor(0.0 ,0.0, 0.0, 0.0);
     glClear(GL_COLOR_BUFFER_BIT);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -620,152 +483,185 @@ void displayfunc()
     glEnable(GL_BLEND);
     glDepthMask(GL_FALSE);
 
-    glColor3f(1.0f,0.6f,0.0f);
+    glColor3f(1.0f, 0.5f, 0.5f);
 
-	NBody *nb = (NBody *)me;
-	if (nb->isFirstLuanch)
-	{
-		//Calling kernel for calculatig subsequent positions
-		nb->runCLKernels();
-		nb->isFirstLuanch = false;
-		return;
-	}
-	clWaitForEvents(1, &nb->glEvent);
+    NBody *nb = (NBody *)me;
+    if (nb->isFirstLuanch)
+    {
+        //Calling kernel for calculatig subsequent positions
+        nb->runCLKernels();
+        nb->isFirstLuanch = false;
+        return;
+    }
+
+
+    int numBodies = nb->numParticles;
+    float* pos = nb->getMappedParticlePositions();
+    nb->runCLKernels();
     glBegin(GL_POINTS);
-    for(int i = 0; i < numBodies; ++i)
+    for(int i = 0; i < numBodies; ++i,pos+=4)
     {
         //divided by 300 just for scaling
-        glVertex3d(pos[i * 4 + 0] / 300, pos[i * 4 + 1] / 300, pos[i * 4 + 2] / 300);
+        glVertex4f(*pos,*(pos+1),*(pos+2),300.0f);
     }
     glEnd();
-	//Calling kernel for calculatig subsequent positions
-	nb->runCLKernels();
+    nb->releaseMappedParticlePositions();
 
+    //Calling kernel for calculating subsequent positions
     glFlush();
     glutSwapBuffers();
-	
+
+    numFrames++;
+    // update window title with FPS
+    if (numFrames >= 100)
+    {
+        char buf[256];
+        sprintf(buf, "N-body simulation - %d Particles, %.02f FPS"
+                , nb->numParticles, (float)nb->getFPS());
+        glutSetWindowTitle(buf);
+        numFrames = 0;
+    }
 }
 
-// keyboard function 
+// keyboard function
 void
 keyboardFunc(unsigned char key, int mouseX, int mouseY)
 {
     switch(key)
     {
-        // If the user hits escape or Q, then exit 
+        // If the user hits escape or Q, then exit
 
         // ESCAPE_KEY = 27
     case 27:
     case 'q':
     case 'Q':
+    {
+        if(((NBody*)me)->cleanup() != SDK_SUCCESS)
         {
-            if(((NBody*)me)->cleanup() != SDK_SUCCESS)
-                exit(1);
-            else
-                exit(0);
+            exit(1);
         }
+        else
+        {
+            exit(0);
+        }
+    }
     default:
         break;
     }
 }
 
 
-int 
+int
 NBody::run()
 {
     int status = 0;
     // Arguments are set and execution call is enqueued on command buffer
     if(setupCLKernels() != SDK_SUCCESS)
-        return SDK_FAILURE;
-
-    if(verify || timing)
     {
-        int timer = sampleCommon->createTimer();
-        sampleCommon->resetTimer(timer);
-        sampleCommon->startTimer(timer);
+        return SDK_FAILURE;
+    }
+
+    if(sampleArgs->verify || sampleArgs->timing)
+    {
+        int timer = sampleTimer->createTimer();
+        sampleTimer->resetTimer(timer);
+        sampleTimer->startTimer(timer);
 
         for(int i = 0; i < iterations; ++i)
         {
             if(runCLKernels() != SDK_SUCCESS)
+            {
                 return SDK_FAILURE;
+            }
         }
 
         status = clFinish(this->commandQueue);
-        if (status)
-        {
-            // dummy code to mute compiler error
-        }
-        sampleCommon->stopTimer(timer);
+        sampleTimer->stopTimer(timer);
         // Compute kernel time
-        kernelTime = (double)(sampleCommon->readTimer(timer)) / iterations;
-    }
+        kernelTime = (double)(sampleTimer->readTimer(timer)) / iterations;
 
-    if(!quiet)
-    {
-        sampleCommon->printArray<cl_float>("Output", pos, numBodies, 1);
+        if(!sampleArgs->quiet)
+        {
+            float* pos = getMappedParticlePositions();
+            printArray<cl_float>("Output", pos, numBodies, 1);
+            releaseMappedParticlePositions();
+        }
     }
-
     return SDK_SUCCESS;
 }
 
 int
 NBody::verifyResults()
 {
-    if(verify)
+    int ret = SDK_SUCCESS;
+    if(sampleArgs->verify)
     {
-        /* reference implementation
-         * it overwrites the input array with the output
-         */
-
-        refPos = (cl_float*)malloc(numBodies * sizeof(cl_float4));
-        CHECK_ALLOCATION(refPos, "Failed to allocate host memory. (refPos)");
-
-        refVel = (cl_float*)malloc(numBodies * sizeof(cl_float4));
-        CHECK_ALLOCATION(refVel, "Failed to allocate host memory. (refVel)");
-
-        memcpy(refPos, initPos, 4 * numBodies * sizeof(cl_float));
-        memcpy(refVel, initVel, 4 * numBodies * sizeof(cl_float));
-
+        float* posBuffers[2];
+        float* velBuffers[2];
+        for (int i = 0; i < 2; i++)
+        {
+            posBuffers[i] = (float*)malloc(numBodies * 4 * sizeof(float));
+            CHECK_ALLOCATION(posBuffers[i], "Failed to allocate host memory. posBuffers");
+            velBuffers[i] = (float*)malloc(numBodies * 4 * sizeof(float));
+            CHECK_ALLOCATION(velBuffers[i], "Failed to allocate host memory. velBuffers");
+        }
+        memcpy(posBuffers[0], initPos, 4 * numBodies * sizeof(float));
+        memset(velBuffers[0], 0, numBodies * 4 * sizeof(float));
         for(int i = 0; i < iterations; ++i)
         {
-            nBodyCPUReference();
+            int current = i%2;
+            int next = (i+1)%2;
+            nBodyCPUReference(posBuffers[current], velBuffers[current]
+                              , posBuffers[next], velBuffers[next]);
         }
 
         // compare the results and see if they match
-        if(sampleCommon->compare(pos, refPos, 4 * numBodies, 0.00001))
+        float* pos = getMappedParticlePositions();
+        if(compare(pos, posBuffers[(iterations)%2], 4 * numBodies, 0.00001))
         {
             std::cout << "Passed!\n" << std::endl;
-            return SDK_SUCCESS;
+            ret = SDK_SUCCESS;
         }
         else
         {
             std::cout << "Failed!\n" << std::endl;
-            return SDK_FAILURE;
+            ret = SDK_FAILURE;
         }
+        releaseMappedParticlePositions();
+
+        for (int i = 0; i < 2; i++)
+        {
+            free(posBuffers[i]);
+            free(velBuffers[i]);
+        }
+
     }
-    return SDK_SUCCESS;
+    return ret;
 }
 
-void 
+void
 NBody::printStats()
 {
-    std::string strArray[4] = 
+    if(sampleArgs->timing)
     {
-        "Particles", 
-        "Iterations", 
-        "Time(sec)", 
-        "kernelTime(sec)"
-    };
+        std::string strArray[4] =
+        {
+            "Particles",
+            "Iterations",
+            "Time(sec)",
+            "kernelTime(sec)"
+        };
 
-    std::string stats[4];
-    totalTime = setupTime + kernelTime;
+        std::string stats[4];
+        sampleTimer->totalTime = setupTime + kernelTime;
 
-    stats[0] = sampleCommon->toString(numParticles, std::dec);
-    stats[1] = sampleCommon->toString(iterations, std::dec);
-    stats[2] = sampleCommon->toString(totalTime, std::dec);
-    stats[3] = sampleCommon->toString(kernelTime, std::dec);
+        stats[0] = toString(numParticles, std::dec);
+        stats[1] = toString(iterations, std::dec);
+        stats[2] = toString(sampleTimer->totalTime, std::dec);
+        stats[3] = toString(kernelTime, std::dec);
 
-    this->SDKSample::printStats(strArray, stats, 4);
+        printStatistics(strArray, stats, 4);
+    }
 }
 
 int
@@ -780,17 +676,13 @@ NBody::cleanup()
     status = clReleaseProgram(program);
     CHECK_OPENCL_ERROR(status, "clReleaseProgram failed.(program)");
 
-    status = clReleaseMemObject(currPos);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(currPos)");
-
-    status = clReleaseMemObject(currVel);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(currVel)");
-
-    status = clReleaseMemObject(newPos);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(newPos)");
-
-    status = clReleaseMemObject(newVel);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(newVel)");
+    for (int i = 0; i < 2; i++)
+    {
+        status = clReleaseMemObject(particlePos[i]);
+        CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(particlePos)");
+        status = clReleaseMemObject(particleVel[i]);
+        CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(particleVel)");
+    }
 
     status = clReleaseCommandQueue(commandQueue);
     CHECK_OPENCL_ERROR(status, "clReleaseCommandQueue failed.(commandQueue)");
@@ -803,52 +695,58 @@ NBody::cleanup()
 
 NBody::~NBody()
 {
-	if (this->glEvent)
-		clReleaseEvent(this->glEvent);
-    // release program resources 
+    if (this->glEvent)
+    {
+        clReleaseEvent(this->glEvent);
+    }
+    // release program resources
     FREE(initPos);
 
     FREE(initVel);
 
 #if defined (_WIN32)
-        ALIGNED_FREE(pos);
+    ALIGNED_FREE(pos);
 #else
-        FREE(pos);
+    FREE(pos);
 #endif
 
 #if defined (_WIN32)
-        ALIGNED_FREE(vel);
+    ALIGNED_FREE(vel);
 #else
-        FREE(vel);
+    FREE(vel);
 #endif
 
     FREE(devices);
-    FREE(refPos);
-    FREE(refVel);
 }
 
 
-int 
+int
 main(int argc, char * argv[])
 {
     int status = 0;
-    NBody clNBody("OpenCL NBody");
+    NBody clNBody;
     me = &clNBody;
 
     if(clNBody.initialize() != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    if (clNBody.parseCommandLine(argc, argv) != SDK_SUCCESS)
+    if (clNBody.sampleArgs->parseCommandLine(argc, argv) != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    if(clNBody.isDumpBinaryEnabled())
+    if(clNBody.sampleArgs->isDumpBinaryEnabled())
     {
         return clNBody.genBinaryImage();
     }
 
     status = clNBody.setup();
     if(status != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
     status = clNBody.run();
     CHECK_ERROR(status, SDK_SUCCESS, "Sample Run Program Failed");
@@ -860,16 +758,16 @@ main(int argc, char * argv[])
 
     if(display)
     {
-        // Run in  graphical window if requested 
+        // Run in  graphical window if requested
         glutInit(&argc, argv);
         glutInitWindowPosition(100,10);
-        glutInitWindowSize(600,600); 
+        glutInitWindowSize(600,600);
         glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
-        glutCreateWindow("nbody simulation"); 
-        GLInit(); 
-        glutDisplayFunc(displayfunc); 
+        glutCreateWindow("N-body simulation");
+        GLInit();
+        glutDisplayFunc(displayfunc);
         glutReshapeFunc(reShape);
-        glutIdleFunc(idle); 
+        glutIdleFunc(idle);
         glutKeyboardFunc(keyboardFunc);
         glutMainLoop();
     }

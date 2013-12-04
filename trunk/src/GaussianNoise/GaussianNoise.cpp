@@ -1,10 +1,10 @@
 /**********************************************************************
-Copyright ©2012 Advanced Micro Devices, Inc. All rights reserved.
+Copyright ©2013 Advanced Micro Devices, Inc. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
-•	Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-•	Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
+•   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+•   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
  other materials provided with the distribution.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -33,7 +33,8 @@ MSG msg;
 GLXContext gGlCtxSep;
 #define GLX_CONTEXT_MAJOR_VERSION_ARB           0x2091
 #define GLX_CONTEXT_MINOR_VERSION_ARB           0x2092
-typedef GLXContext (*GLXCREATECONTEXTATTRIBSARBPROC)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
+typedef GLXContext (*GLXCREATECONTEXTATTRIBSARBPROC)(Display*, GLXFBConfig,
+        GLXContext, Bool, const int*);
 Window          winSep;
 Display         *displayNameSep;
 XEvent          xevSep;
@@ -83,7 +84,7 @@ int
 GaussianNoiseGL::readInputImage(std::string inputImageName)
 {
     // load input bitmap image
-    std::string filePath = sampleCommon->getPath() + std::string(INPUT_IMAGE);
+    std::string filePath = getPath() + std::string(INPUT_IMAGE);
     inputBitmap.load(filePath.c_str());
     if(!inputBitmap.isLoaded())
     {
@@ -101,9 +102,10 @@ GaussianNoiseGL::readInputImage(std::string inputImageName)
 
     // allocate memory for output image data
     outputImageData = (cl_uchar4*)malloc(width * height * sizeof(cl_uchar4));
-    CHECK_ALLOCATION(outputImageData, "Failed to allocate memory! (outputImageData)");
+    CHECK_ALLOCATION(outputImageData,
+                     "Failed to allocate memory! (outputImageData)");
 
-    // initializa the Image data to NULL
+    // initialize the Image data to NULL
     memset(outputImageData, 0, width * height * pixelSize);
 
     // get the pointer to pixel data
@@ -130,7 +132,7 @@ GaussianNoiseGL::writeOutputImage(std::string outputImageName)
     // write the output bmp file
     if(!inputBitmap.write(outputImageName.c_str()))
     {
-        sampleCommon->error("Failed to write output image!");
+        error("Failed to write output image!");
         return SDK_FAILURE;
     }
 
@@ -140,14 +142,16 @@ GaussianNoiseGL::writeOutputImage(std::string outputImageName)
 int
 GaussianNoiseGL::genBinaryImage()
 {
-    streamsdk::bifData binaryData;
+    bifData binaryData;
     binaryData.kernelName = std::string("GaussianNoiseGL_Kernels.cl");
     binaryData.flagsStr = std::string("");
-    if(isComplierFlagsSpecified())
-        binaryData.flagsFileName = std::string(flags.c_str());
+    if(sampleArgs->isComplierFlagsSpecified())
+    {
+        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
+    }
 
-    binaryData.binaryName = std::string(dumpBinary.c_str());
-    int status = sampleCommon->generateBinaryImage(binaryData);
+    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
+    int status = generateBinaryImage(binaryData);
     return status;
 }
 
@@ -164,9 +168,9 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
     XCloseDisplay(displayNameSep);
     for (int i = 0; i < screenNumber; i++)
     {
-        if (isDeviceIdEnabled())
+        if (sampleArgs->isDeviceIdEnabled())
         {
-            if (i < (int)deviceId)
+            if (i < sampleArgs->deviceId)
             {
                 continue;
             }
@@ -219,9 +223,12 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
         std::cout << "glXCreateContextAttribsARB "
                   << (void*) glXGetProcAddress((const GLubyte*)"glXCreateContextAttribsARB")
                   << std::endl;
-        GLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB = (GLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress((const GLubyte*)"glXCreateContextAttribsARB");
+        GLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB =
+            (GLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress((const GLubyte*)
+                    "glXCreateContextAttribsARB");
 
-        int attribs[] = {
+        int attribs[] =
+        {
             GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
             GLX_CONTEXT_MINOR_VERSION_ARB, 0,
             0
@@ -242,7 +249,8 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
                                         };
         if (!clGetGLContextInfoKHR)
         {
-            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn) clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
+            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
+                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
             if (!clGetGLContextInfoKHR)
             {
                 std::cout << "Failed to query proc address for clGetGLContextInfoKHR";
@@ -275,7 +283,7 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
                                       CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
                                       CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
                                     };
-    if (deviceType.compare("gpu") == 0)
+    if (sampleArgs->deviceType.compare("gpu") == 0)
     {
         status = clGetGLContextInfoKHR( cpsGL,
                                         CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
@@ -333,7 +341,8 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
 
 #ifdef _WIN32
 int
-GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_platform_id platform, cl_context &context, cl_device_id &interopDevice)
+GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC,
+        cl_platform_id platform, cl_context &context, cl_device_id &interopDevice)
 {
     cl_int status;
     BOOL ret = FALSE;
@@ -343,7 +352,8 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
     PIXELFORMATDESCRIPTOR  pfd;
     pfd.nSize           = sizeof(PIXELFORMATDESCRIPTOR);
     pfd.nVersion        = 1;
-    pfd.dwFlags         = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL  | PFD_DOUBLEBUFFER ;
+    pfd.dwFlags         = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL  |
+                          PFD_DOUBLEBUFFER ;
     pfd.iPixelType      = PFD_TYPE_RGBA;
     pfd.cColorBits      = 24;
     pfd.cRedBits        = 8;
@@ -378,7 +388,8 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
     int yCoordinate = 0;
     int xCoordinate1 = 0;
 
-    for (deviceNum = 0; EnumDisplayDevices(NULL, deviceNum, &dispDevice, 0); deviceNum++)
+    for (deviceNum = 0; EnumDisplayDevices(NULL, deviceNum, &dispDevice, 0);
+            deviceNum++)
     {
         if (dispDevice.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)
         {
@@ -387,7 +398,6 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
 
         if(!(dispDevice.StateFlags & DISPLAY_DEVICE_ACTIVE))
         {
-            std::cout << "Display device " << deviceNum << " is not connected!!" << std::endl;
             continue;
         }
 
@@ -415,13 +425,13 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
         windowclass.hCursor = LoadCursor(NULL, IDC_ARROW);
         windowclass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
         windowclass.lpszMenuName = NULL;
-        windowclass.lpszClassName = reinterpret_cast<LPCSTR>("BoxFilterGLSeperable");
+        windowclass.lpszClassName = reinterpret_cast<LPCSTR>("GaussianNoiseGL");
         RegisterClass(&windowclass);
 
-        gHwnd = CreateWindow(reinterpret_cast<LPCSTR>("BoxFilterGLSeperable"),
-                             reinterpret_cast<LPCSTR>("BoxFilterGLSeperable"),
+        gHwnd = CreateWindow(reinterpret_cast<LPCSTR>("GaussianNoiseGL"),
+                             reinterpret_cast<LPCSTR>("GaussianNoiseGL"),
                              WS_CAPTION | WS_POPUPWINDOW,
-                             isDeviceIdEnabled() ? xCoordinate1 : xCoordinate,
+                             sampleArgs->isDeviceIdEnabled() ? xCoordinate1 : xCoordinate,
                              yCoordinate,
                              width,
                              height,
@@ -472,7 +482,8 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
 
         if (!clGetGLContextInfoKHR)
         {
-            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn) clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
+            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
+                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
             if (!clGetGLContextInfoKHR)
             {
                 std::cout<<"Failed to query proc address for clGetGLContextInfoKHR";
@@ -506,13 +517,13 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
         }
         else
         {
-            if (deviceId == 0)
+            if (sampleArgs->deviceId == 0)
             {
                 ShowWindow(gHwnd, SW_SHOW);
                 //Found a winner
                 break;
             }
-            else if (deviceId != connectedDisplays)
+            else if (sampleArgs->deviceId != connectedDisplays)
             {
                 connectedDisplays++;
                 wglMakeCurrent(NULL, NULL);
@@ -555,7 +566,7 @@ GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC, cl_pla
         0
     };
 
-    if (deviceType.compare("gpu") == 0)
+    if (sampleArgs->deviceType.compare("gpu") == 0)
     {
         status = clGetGLContextInfoKHR( properties,
                                         CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
@@ -626,14 +637,14 @@ GaussianNoiseGL::setupCL()
     cl_int status = CL_SUCCESS;
     cl_device_type dType;
 
-    if(deviceType.compare("cpu") == 0)
+    if(sampleArgs->deviceType.compare("cpu") == 0)
     {
         dType = CL_DEVICE_TYPE_CPU;
     }
-    else //deviceType = "gpu"
+    else //sampleArgs->deviceType = "gpu"
     {
         dType = CL_DEVICE_TYPE_GPU;
-        if(isThereGPU() == false)
+        if(sampleArgs->isThereGPU() == false)
         {
             std::cout << "GPU not found. Falling back to CPU device" << std::endl;
             dType = CL_DEVICE_TYPE_CPU;
@@ -645,20 +656,24 @@ GaussianNoiseGL::setupCL()
      * the AMD one if available or a reasonable default.
      */
     cl_platform_id platform = NULL;
-    int retValue = sampleCommon->getPlatform(platform, platformId, isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "sampleCommon::getPlatform() failed");
+    int retValue = getPlatform(platform, sampleArgs->platformId,
+                               sampleArgs->isPlatformEnabled());
+    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
 
     // Display available devices.
-    retValue = sampleCommon->displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "sampleCommon::displayDevices() failed");
+    retValue = displayDevices(platform, dType);
+    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
 
 
 #ifdef _WIN32
-    int success = enableGLAndGetGLContext(gHwnd, gHdc, gGlCtx, platform, context, interopDeviceId);
+    int success = enableGLAndGetGLContext(gHwnd, gHdc, gGlCtx, platform, context,
+                                          interopDeviceId);
     if(SDK_SUCCESS != success)
     {
         if(success == SDK_EXPECTED_FAILURE)
+        {
             return SDK_EXPECTED_FAILURE;
+        }
         return SDK_FAILURE;
     }
 #else
@@ -683,7 +698,7 @@ GaussianNoiseGL::setupCL()
                  &deviceListSize);
     CHECK_OPENCL_ERROR(status, "clGetContextInfo failed.");
 
-    // int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));  // Not used
+    int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));
 
     devices = (cl_device_id *)malloc(deviceListSize);
     CHECK_ALLOCATION((devices), "Failed to allocate memory (devices).");
@@ -697,7 +712,9 @@ GaussianNoiseGL::setupCL()
     CHECK_OPENCL_ERROR(status, "clGetGetContextInfo failed.");
 
     if (dType == CL_DEVICE_TYPE_CPU)
-        interopDeviceId = devices[deviceId];
+    {
+        interopDeviceId = devices[sampleArgs->deviceId];
+    }
 
     // Create command queue
 
@@ -720,7 +737,8 @@ GaussianNoiseGL::setupCL()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     /*
@@ -739,10 +757,12 @@ GaussianNoiseGL::setupCL()
     * Create and initialize memory objects
     */
 
-    // Set Presistent memory only for AMD platform
+    // Set Persistent memory only for AMD platform
     cl_mem_flags inMemFlags = CL_MEM_READ_ONLY;
-    if(isAmdPlatform())
+    if(sampleArgs->isAmdPlatform())
+    {
         inMemFlags |= CL_MEM_USE_PERSISTENT_MEM_AMD;
+    }
 
     // Create memory object for input Image
     inputImageBuffer = clCreateBuffer(
@@ -770,46 +790,50 @@ GaussianNoiseGL::setupCL()
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = sampleCommon->waitForEventAndRelease(&writeEvt);
+    status = waitForEventAndRelease(&writeEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(writeEvt) Failed");
 
 
 
     // create a CL program using the kernel source
-    streamsdk::buildProgramData buildData;
+    buildProgramData buildData;
     buildData.kernelName = std::string("GaussianNoiseGL_Kernels.cl");
     buildData.devices = devices;
-    buildData.deviceId = deviceId;
+    buildData.deviceId = sampleArgs->deviceId;
     buildData.flagsStr = std::string("");
-    
 
-     if(isComplierFlagsSpecified())
-        buildData.flagsFileName = std::string(flags.c_str());
 
-    if(isLoadBinaryEnabled())
+    if(sampleArgs->isComplierFlagsSpecified())
     {
-        
-        buildData.binaryName = std::string(loadBinary.c_str());
+        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
     }
 
-   
+    if(sampleArgs->isLoadBinaryEnabled())
+    {
+
+        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
+    }
 
 
-    streamsdk::buildProgramData buildData2;
+
+
+    buildProgramData buildData2;
     buildData2.kernelName = std::string("GaussianNoiseGL_Kernels2.cl");
     buildData2.devices = devices;
-    buildData2.deviceId = deviceId;
+    buildData2.deviceId = sampleArgs->deviceId;
     buildData2.flagsStr = std::string("");
 
-    if(isComplierFlagsSpecified())
-        buildData2.flagsFileName = std::string(flags.c_str());
-    if(isLoadBinaryEnabled())
+    if(sampleArgs->isComplierFlagsSpecified())
     {
-        
-        buildData2.binaryName = std::string(loadBinary.c_str());
+        buildData2.flagsFileName = std::string(sampleArgs->flags.c_str());
+    }
+    if(sampleArgs->isLoadBinaryEnabled())
+    {
+
+        buildData2.binaryName = std::string(sampleArgs->loadBinary.c_str());
     }
 
-   
+
     cl_program program1;
     cl_program program2;
     retValue = compileOpenCLProgram(program1, context, buildData);
@@ -817,7 +841,7 @@ GaussianNoiseGL::setupCL()
     std::string flagsStr = std::string(buildData.flagsStr.c_str());
     retValue = compileOpenCLProgram(program2, context, buildData2);
     CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
-    
+
     retValue=
         clCompileProgram(program1,
                          0,
@@ -859,12 +883,12 @@ GaussianNoiseGL::setupCL()
     CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
 
 
-    status =  kernelInfo.setKernelWorkGroupInfo(kernel,devices[deviceId]);
+    status =  kernelInfo.setKernelWorkGroupInfo(kernel,interopDeviceId);
     CHECK_ERROR(status, SDK_SUCCESS, "setKErnelWorkGroupInfo() failed");
 
     if((blockSizeX * blockSizeY) > kernelInfo.kernelWorkGroupSize)
     {
-        if(!quiet)
+        if(!sampleArgs->quiet)
         {
             std::cout << "Out of Resources!" << std::endl;
             std::cout << "Group Size specified : "
@@ -911,7 +935,7 @@ GaussianNoiseGL::runCLKernels()
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = sampleCommon->waitForEventAndRelease(&acquireEvt);
+    status = waitForEventAndRelease(&acquireEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(acquireEvt) Failed");
 
     status = clSetKernelArg(
@@ -950,10 +974,10 @@ GaussianNoiseGL::runCLKernels()
 
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = sampleCommon->waitForEventAndRelease(&ndrEvt2);
+    status = waitForEventAndRelease(&ndrEvt2);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(ndrEvt2) Failed");
 
-    
+
     //read image to host buffer
     cl_event readEvt;
     size_t origin[3] = {0,0,0};
@@ -975,9 +999,9 @@ GaussianNoiseGL::runCLKernels()
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = sampleCommon->waitForEventAndRelease(&readEvt);
+    status = waitForEventAndRelease(&readEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(readEvt) Failed");
-    
+
 
     // Now OpenGL gets control of outputImageBuffer
     cl_event releaseGLEvt;
@@ -992,7 +1016,7 @@ GaussianNoiseGL::runCLKernels()
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = sampleCommon->waitForEventAndRelease(&releaseGLEvt);
+    status = waitForEventAndRelease(&releaseGLEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(releaseGLEvt) Failed");
 
     return SDK_SUCCESS;
@@ -1004,16 +1028,18 @@ int
 GaussianNoiseGL::initialize()
 {
     // Call base class Initialize to get default configuration
-    if(this->SDKSample::initialize())
+    if(sampleArgs->initialize())
+    {
         return SDK_FAILURE;
+    }
 
-    streamsdk::Option* iteration_option = new streamsdk::Option;
+    Option* iteration_option = new Option;
     CHECK_ALLOCATION(iteration_option, "Memory Allocation error.\n");
 
     iteration_option->_sVersion = "i";
     iteration_option->_lVersion = "iterations";
     iteration_option->_description = "Number of iterations to execute kernel";
-    iteration_option->_type = streamsdk::CA_ARG_INT;
+    iteration_option->_type = CA_ARG_INT;
     iteration_option->_value = &iterations;
 
     sampleArgs->AddOption(iteration_option);
@@ -1021,16 +1047,16 @@ GaussianNoiseGL::initialize()
 
 
 
-    streamsdk::Option* factor_option = new streamsdk::Option;
+    Option* factor_option = new Option;
     if(!factor_option)
     {
-        sampleCommon->error("Memory Allocation error.\n");
+        error("Memory Allocation error.\n");
         return SDK_FAILURE;
     }
     factor_option->_sVersion = "f";
     factor_option->_lVersion = "factor";
     factor_option->_description = "Noise factor";
-    factor_option->_type = streamsdk::CA_ARG_INT;
+    factor_option->_type = CA_ARG_INT;
     factor_option->_value = &verfactor;
 
     sampleArgs->AddOption(factor_option);
@@ -1044,31 +1070,35 @@ GaussianNoiseGL::initialize()
 int
 GaussianNoiseGL::setup()
 {
-	if(iterations < 1)
-	{
-		std::cout<<"Error, iterations cannot be 0 or negative. Exiting..\n";
-		exit(0);
-	}
+    if(iterations < 1)
+    {
+        std::cout<<"Error, iterations cannot be 0 or negative. Exiting..\n";
+        exit(0);
+    }
     // Allocate host memory and read input image
     if(readInputImage(INPUT_IMAGE) != SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
     // create and initialize timers
-    int timer = sampleCommon->createTimer();
-    sampleCommon->resetTimer(timer);
-    sampleCommon->startTimer(timer);
+    int timer = sampleTimer->createTimer();
+    sampleTimer->resetTimer(timer);
+    sampleTimer->startTimer(timer);
 
     cl_int retValue = setupCL();
     if(retValue != SDK_SUCCESS)
     {
         if(retValue == SDK_EXPECTED_FAILURE)
+        {
             return SDK_EXPECTED_FAILURE;
+        }
         return SDK_FAILURE;
     }
 
-    sampleCommon->stopTimer(timer);
-    // Compute setup time
-    setupTime = (double)(sampleCommon->readTimer(timer));
+    sampleTimer->stopTimer(timer);
+    // Compute set-up time
+    setupTime = (double)(sampleTimer->readTimer(timer));
 
     return SDK_SUCCESS;
 
@@ -1083,13 +1113,15 @@ GaussianNoiseGL::run()
     {
         // Set kernel arguments and run kernel
         if(runCLKernels() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
     }
 
     // create and initialize timers
-    int timer = sampleCommon->createTimer();
-    sampleCommon->resetTimer(timer);
-    sampleCommon->startTimer(timer);
+    int timer = sampleTimer->createTimer();
+    sampleTimer->resetTimer(timer);
+    sampleTimer->startTimer(timer);
 
 
     std::cout << "Executing kernel for " << iterations <<
@@ -1101,14 +1133,16 @@ GaussianNoiseGL::run()
     {
         // Set kernel arguments and run kernel
         if(runCLKernels() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
     }
 
-    sampleCommon->stopTimer(timer);
+    sampleTimer->stopTimer(timer);
     // Compute kernel time
-    kernelTime = (double)(sampleCommon->readTimer(timer)) / iterations;
+    kernelTime = (double)(sampleTimer->readTimer(timer)) / iterations;
 
-    if(!verify && !quiet)
+    if(!sampleArgs->verify && !sampleArgs->quiet)
     {
         std::cout << "\nPress key w to increase the factor \n";
         std::cout << "Press key s to decrease the factor \n";
@@ -1121,11 +1155,11 @@ GaussianNoiseGL::run()
         while(1)
         {
             bool goOn = true;
-            
+
             t1 = clock() * CLOCKS_PER_SEC;
             frameCount++;
 
-            // Execute the kernel which applies the boxfilter
+            // Execute the kernel
             gaussianNoise->runCLKernels();
 
             // Bind texture
@@ -1179,7 +1213,8 @@ GaussianNoiseGL::run()
             {
                 // set GLUT Window Title
                 char title[256];
-                double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) / (double) frameCount);
+                double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) /
+                                      (double) frameCount);
                 int framesPerSec = (int)(1.0 / (fMs / CLOCKS_PER_SEC));
 #if defined (_WIN32) && !defined(__MINGW32__)
                 sprintf_s(title, 256, "GaussianNoiseGL | %d fps ", framesPerSec);
@@ -1191,7 +1226,7 @@ GaussianNoiseGL::run()
                 totalElapsedTime = 0.0;
                 XStoreName(displayNameSep, winSep, title);
             }
-            
+
             /* handle the events in the queue */
             while (goOn)
             {
@@ -1206,7 +1241,7 @@ GaussianNoiseGL::run()
                 case ButtonPress:
                     if (xevSep.xbutton.button == Button2)
                     {
-                       goOn = false;
+                        goOn = false;
                     }
                     break;
                 case KeyPress:
@@ -1265,7 +1300,7 @@ GaussianNoiseGL::run()
                 t1 = clock() * CLOCKS_PER_SEC;
                 frameCount++;
 
-                // Execute the kernel which applies the boxfilter
+                // Execute the kernel
                 gaussianNoise->runCLKernels();
 
                 // Bind  texture
@@ -1318,7 +1353,8 @@ GaussianNoiseGL::run()
                 {
                     // set GLUT Window Title
                     char title[256];
-                    double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) / (double) frameCount);
+                    double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) /
+                                          (double) frameCount);
                     int framesPerSec = (int)(1.0 / (fMs / CLOCKS_PER_SEC));
 #if defined (_WIN32) && !defined(__MINGW32__)
                     sprintf_s(title, 256, "GaussianNoiseGL | %d fps ", framesPerSec);
@@ -1372,7 +1408,7 @@ GaussianNoiseGL::cleanup()
     status = clReleaseMemObject(outputImageBuffer);
     CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.");
 
-#ifndef _WIN32 
+#ifndef _WIN32
     glXMakeCurrent(displayNameSep, None, NULL);
     glXDestroyContext(displayNameSep, gGlCtxSep);
     glDeleteTextures(1, &tex);
@@ -1410,7 +1446,7 @@ GaussianNoiseGL::verifyResults()
 {
 
 
-    if(verify)
+    if(sampleArgs->verify)
     {
 
 
@@ -1439,73 +1475,48 @@ GaussianNoiseGL::verifyResults()
 void
 GaussianNoiseGL::printStats()
 {
-    std::string strArray[4] =
+    if(sampleArgs->timing)
     {
-        "Width",
-        "Height",
-        "Time(sec)",
-        "kernelTime(sec)"
-    };
-    std::string stats[4];
+        std::string strArray[4] =
+        {
+            "Width",
+            "Height",
+            "Time(sec)",
+            "kernelTime(sec)"
+        };
+        std::string stats[4];
 
-    totalTime = setupTime + kernelTime;
+        sampleTimer->totalTime = setupTime + kernelTime;
 
-    stats[0] = sampleCommon->toString(width, std::dec);
-    stats[1] = sampleCommon->toString(height, std::dec);
-    stats[2] = sampleCommon->toString(totalTime, std::dec);
-    stats[3] = sampleCommon->toString(kernelTime, std::dec);
+        stats[0] = toString(width, std::dec);
+        stats[1] = toString(height, std::dec);
+        stats[2] = toString(sampleTimer->totalTime, std::dec);
+        stats[3] = toString(kernelTime, std::dec);
 
-    this->SDKSample::printStats(strArray, stats, 4);
+        printStatistics(strArray, stats, 4);
+    }
 }
-
 
 // Initialize the value to NULL
 GaussianNoiseGL *GaussianNoiseGL::gaussianNoise = NULL;
-namespace streamsdk
+namespace appsdk
 {
-/* Returns the path of executable being generated */
-std::string
-getPath()
-{
-#ifdef _WIN32
-    char buffer[MAX_PATH];
-#ifdef UNICODE
-    if(!GetModuleFileName(NULL, (LPWCH)buffer, sizeof(buffer)))
-        throw std::string("GetModuleFileName() failed!");
-#else
-    if(!GetModuleFileName(NULL, buffer, sizeof(buffer)))
-        throw std::string("GetModuleFileName() failed!");
-#endif
-    std::string str(buffer);
-    /* '\' == 92 */
-    int last = (int)str.find_last_of((char)92);
-#else
-    char buffer[PATH_MAX + 1];
-    ssize_t len;
-    if((len = readlink("/proc/self/exe",buffer, sizeof(buffer) - 1)) == -1)
-        throw std::string("readlink() failed!");
-    buffer[len] = '\0';
-    std::string str(buffer);
-    /* '/' == 47 */
-    int last = (int)str.find_last_of((char)47);
-#endif
-    return str.substr(0, last + 1);
-}
 
 
 int
-compileOpenCLProgram(cl_program &program, const cl_context& context,  buildProgramData &buildData)
+compileOpenCLProgram(cl_program &program, const cl_context& context,
+                     buildProgramData &buildData)
 {
     cl_int status = CL_SUCCESS;
-    streamsdk::SDKFile kernelFile;
+    SDKFile kernelFile;
     std::string kernelPath = getPath();
 
-     std::string flagsStr = std::string(buildData.flagsStr.c_str());
+    std::string flagsStr = std::string(buildData.flagsStr.c_str());
 
     // Get additional options
     if(buildData.flagsFileName.size() != 0)
     {
-        streamsdk::SDKFile flagsFile;
+        SDKFile flagsFile;
         std::string flagsPath = getPath();
         flagsPath.append(buildData.flagsFileName.c_str());
         if(!flagsFile.open(flagsPath.c_str()))
@@ -1519,32 +1530,34 @@ compileOpenCLProgram(cl_program &program, const cl_context& context,  buildProgr
     }
 
     if(flagsStr.size() != 0)
+    {
         std::cout << "Build Options are : " << flagsStr.c_str() << std::endl;
+    }
 
-     buildData.flagsStr = std::string(flagsStr.c_str());
+    buildData.flagsStr = std::string(flagsStr.c_str());
 
 
     if(buildData.binaryName.size() != 0)
     {
-       
-         std::cout << "can not support --load ! clCreateProgramWithSource" << std::endl;
+
+        std::cout << "can not support --load ! clCreateProgramWithSource" << std::endl;
     }
-    
-        kernelPath.append(buildData.kernelName.c_str());
-        if(!kernelFile.open(kernelPath.c_str()))//bool
-        {
-            std::cout << "Failed to load kernel file: " << kernelPath << std::endl;
-            return SDK_FAILURE;
-        }
-        const char * source = kernelFile.source().c_str();
-        size_t sourceSize[] = {strlen(source)};
-        program = clCreateProgramWithSource(context,
-                                            1,
-                                            &source,
-                                            sourceSize,
-                                            &status);
-        CHECK_OPENCL_ERROR(status, "clCreateProgramWithSource failed.");
-    
+
+    kernelPath.append(buildData.kernelName.c_str());
+    if(!kernelFile.open(kernelPath.c_str()))//bool
+    {
+        std::cout << "Failed to load kernel file: " << kernelPath << std::endl;
+        return SDK_FAILURE;
+    }
+    const char * source = kernelFile.source().c_str();
+    size_t sourceSize[] = {strlen(source)};
+    program = clCreateProgramWithSource(context,
+                                        1,
+                                        &source,
+                                        sourceSize,
+                                        &status);
+    CHECK_OPENCL_ERROR(status, "clCreateProgramWithSource failed.");
+
 
 
     return SDK_SUCCESS;
@@ -1556,34 +1569,46 @@ compileOpenCLProgram(cl_program &program, const cl_context& context,  buildProgr
 int
 main(int argc, char *argv[])
 {
-    GaussianNoiseGL clGaussianNoise("OpenCL GaussianNoiseGL");
+    GaussianNoiseGL clGaussianNoise;
     GaussianNoiseGL::gaussianNoise = &clGaussianNoise;
 
     if(clGaussianNoise.initialize()!= SDK_SUCCESS)
+    {
         return SDK_FAILURE;
+    }
 
-    if(clGaussianNoise.parseCommandLine(argc, argv))
+    if(clGaussianNoise.sampleArgs->parseCommandLine(argc, argv))
+    {
         return SDK_FAILURE;
+    }
 
-    if(clGaussianNoise.isDumpBinaryEnabled())
+    if(clGaussianNoise.sampleArgs->isDumpBinaryEnabled())
     {
         //return clGaussianNoise.genBinaryImage();
-         std::cout << "can not support --dump !" << std::endl;
-         
+        std::cout << "can not support --dump !" << std::endl;
+
     }
     else
     {
         if(clGaussianNoise.setup() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
 
         if(clGaussianNoise.run() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
 
         if(clGaussianNoise.verifyResults() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
 
         if(clGaussianNoise.cleanup() != SDK_SUCCESS)
+        {
             return SDK_FAILURE;
+        }
 
         clGaussianNoise.printStats();
     }

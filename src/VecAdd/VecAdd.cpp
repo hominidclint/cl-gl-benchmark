@@ -1,9 +1,9 @@
 #include <stdio.h>
 
-#include "RayTracer.h"
+#include "VecAdd.hpp"
 
 int main(int argc, char const *argv[])
 {
-	printf("CL-GL Ray Tracer micro benchmark\n");
+	printf("CL-GL Vector Add micro benchmark\n");
 	return 0;
 }

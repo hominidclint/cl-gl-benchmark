@@ -1,9 +1,9 @@
 #include <stdio.h>
 
-#include "VecAdd.h"
+#include "FFT.hpp"
 
 int main(int argc, char const *argv[])
 {
-	printf("CL-GL Vector Add micro benchmark\n");
+	printf("CL-GL FFT micro benchmark\n");
 	return 0;
 }

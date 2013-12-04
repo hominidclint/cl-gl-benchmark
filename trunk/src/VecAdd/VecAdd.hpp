@@ -14,90 +14,152 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ********************************************************************/
 
+#ifndef VECADD_H_
+#define VECADD_H_
 
-#ifndef VECADD_H
-#define VECADD_H
+#define GROUP_SIZE 64
 
+#define SAMPLE_VERSION "AMD-APP-SDK-v2.9.214.1"
+
+
+/**
+* VecAdd
+* Class implements OpenCL Vector Add
+
+*/
+
+#ifndef COMMON_DECLARE_HPP__
+#define COMMON_DECLARE_HPP__
+/**
+* This file contains the declaration for Vector Add sample.
+*/
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include <CL/cl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+
 #include "CLUtil.hpp"
-
-#define GROUP_SIZE 128
-
-#define SAMPLE_VERSION "AMD-APP-SDK-v2.9.214.1"
+#include "SDKBitMap.hpp"
 
 using namespace appsdk;
 
+
+
+// GLEW and GLUT includes
+#include <GL/glew.h>
+#include <CL/cl_gl.h>
+
+#ifdef _WIN32
+#pragma comment(lib,"opengl32.lib")
+#pragma comment(lib,"glu32.lib")
+#pragma warning( disable : 4996)
+#endif
+
+// Define DISPLAY_DEVICE_ACTIVE as it is not defined in MinGW
+#ifdef _WIN32
+#ifndef DISPLAY_DEVICE_ACTIVE
+#define DISPLAY_DEVICE_ACTIVE    0x00000001
+#endif
+#endif
+
+#ifndef _WIN32
+#include <GL/glut.h>
+#endif
+
+typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
+    const cl_context_properties *properties,
+    cl_gl_context_info param_name,
+    size_t param_value_size,
+    void *param_value,
+    size_t *param_value_size_ret);
+
 /**
-* VecAdd
-* Class implements OpenCL  VecAdd sample
-*/
+ * Rename references to this dynamically linked function to avoid
+ * collision with static link version
+ */
+#define clGetGLContextInfoKHR clGetGLContextInfoKHR_proc
+static clGetGLContextInfoKHR_fn clGetGLContextInfoKHR;
+
+#endif
+
+
 
 class VecAdd
 {
+    public:
+        static VecAdd *VecAddGL;
+
         cl_double setupTime;                /**< time taken to setup OpenCL resources and building kernel */
         cl_double kernelTime;               /**< time taken to run kernel and read result back */
 
         cl_context context;                 /**< CL context */
         cl_device_id *devices;              /**< CL device list */
-
         cl_command_queue commandQueue;      /**< CL command queue */
-        cl_program program;                 /**< CL program */
-        cl_kernel kernel;                   /**< CL kernel */
-        size_t groupSize;                   /**< Work-Group size */
+        cl_program program;                 /**< CL program  */
+        cl_kernel kernel;
 
-        int iterations;
+        cl_uint width;                      /**< Width of window */
+        cl_uint height;                     /**< Height of window */
+
+        size_t blockSizeX;                  /**< Work-group size in x-direction */
+        size_t blockSizeY;                  /**< Work-group size in y-direction */
+        int iterations;                     /**< Number of iterations for kernel execution */
+        int factor;
+        clock_t t1, t2;
+        int frameCount;
+        int frameRefCount;
+        double totalElapsedTime;
+
+        cl_device_id interopDeviceId;
+
         SDKDeviceInfo deviceInfo;                /**< Structure to store device information*/
-        KernelWorkGroupInfo kernelInfo;          /**< Structure to store kernel related info */
+        KernelWorkGroupInfo
+        kernelInfo;
 
-        int fpsTimer;
-        int timerNumFrames;
-
-        SDKTimer *sampleTimer;      /**< SDKTimer object */
-
-    private:
-
-        float random(float randMax, float randMin);
+        SDKTimer    *sampleTimer;      /**< SDKTimer object */
 
     public:
 
         CLCommandArgs   *sampleArgs;   /**< CLCommand argument class */
 
-        cl_event glEvent;
-
         /**
         * Constructor
         * Initialize member variables
         */
-        explicit VecAdd()
-            : setupTime(0),
-              kernelTime(0),
-              devices(NULL),
-              groupSize(GROUP_SIZE),
-              iterations(1),
-              fpsTimer(0),
-              timerNumFrames(0),
-              glEvent(NULL)
+        VecAdd()
         {
-            sampleArgs = new CLCommandArgs();
+            width = 800;
+            height = 600;
+            blockSizeX = GROUP_SIZE;
+            blockSizeY = 1;
+            iterations = 1;
+            frameCount = 0;
+            frameRefCount = 90;
+            totalElapsedTime = 0.0;
+            sampleArgs = new CLCommandArgs() ;
             sampleTimer = new SDKTimer();
             sampleArgs->sampleVerStr = SAMPLE_VERSION;
         }
 
-        ~VecAdd();
+
+        ~VecAdd()
+        {
+        }
 
         /**
-        * Allocate and initialize host memory array with random values
-        * @return SDK_SUCCESS on success and SDK_FAILURE on failure
-        */
-        int setupVecAdd();
+         * Generate random float number
+         */
+        float random(float randMax, float randMin);
 
         /**
          * Override from SDKSample, Generate binary image of given kernel
          * and exit application
-        * @return SDK_SUCCESS on success and SDK_FAILURE on failure
+         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
          */
         int genBinaryImage();
 
@@ -110,19 +172,23 @@ class VecAdd
         int setupCL();
 
         /**
-        * Set values for kernels' arguments
-        * @return SDK_SUCCESS on success and SDK_FAILURE on failure
+        * Initializing GL and get interoperable CL context
+        * @param argc number of arguments
+        * @param argv command line arguments
+        * @
+        * @return SDK_SUCCESS on success and SDK_FALIURE on failure.
         */
-        int setupCLKernels();
+        int initializeGLAndGetCLContext(cl_platform_id platform,
+                                        cl_context &context,
+                                        cl_device_id &interopDevice);
 
         /**
-        * Enqueue calls to the kernels
+        * Set values for kernels' arguments, enqueue calls to the kernels
         * on to the command queue, wait till end of kernel execution.
         * Get kernel start and end time if timing is enabled
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
         int runCLKernels();
-
 
         /**
         * Override from SDKSample. Print sample stats.
@@ -134,7 +200,7 @@ class VecAdd
         * command line parser, add custom options
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
-        int initialize();
+        int initializeCLP();
 
         /**
         * Override from SDKSample, adjust width and height
@@ -145,7 +211,7 @@ class VecAdd
 
         /**
         * Override from SDKSample
-        * Run OpenCL VecAdd
+        * Run OpenCL Vec Add
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
         int run();
@@ -163,28 +229,22 @@ class VecAdd
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
         int verifyResults();
-
-
-        // init the timer for FPS calculation
-        void initFPSTimer()
-        {
-            timerNumFrames = 0;
-            fpsTimer = sampleTimer->createTimer();
-            sampleTimer->resetTimer(fpsTimer);
-            sampleTimer->startTimer(fpsTimer);
-        };
-
-        // calculate FPS
-        double getFPS()
-        {
-            sampleTimer->stopTimer(fpsTimer);
-            double elapsedTime = sampleTimer->readTimer(fpsTimer);
-            double fps = timerNumFrames/elapsedTime;
-            timerNumFrames = 0;
-            sampleTimer->resetTimer(fpsTimer);
-            sampleTimer->startTimer(fpsTimer);
-            return fps;
-        };
 };
+namespace appsdk
+{
 
-#endif // VECADD_H
+
+/**
+* buildOpenCLProgram
+* builds the opencl program
+* @param program program object
+* @param context cl_context object
+* @param buildData buildProgramData Object
+* @return 0 if success else nonzero
+*/
+int compileOpenCLProgram(cl_program &program, const cl_context& context,
+                         buildProgramData &buildData);
+
+
+}
+#endif // VECADD_H_

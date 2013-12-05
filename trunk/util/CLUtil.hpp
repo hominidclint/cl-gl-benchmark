@@ -120,13 +120,13 @@ struct buildProgramData
  * @param input Templated the error code
  * @return const char* the string for the error code
  */
-static const char* getOpenCLErrorCodeStr(std::string input)
+ const char* getOpenCLErrorCodeStr(std::string input)
 {
     return "unknown error code";
 }
 
 template<typename T>
-static const char* getOpenCLErrorCodeStr(T input)
+ const char* getOpenCLErrorCodeStr(T input)
 {
     int errorCode = (int)input;
     switch(errorCode)
@@ -248,7 +248,7 @@ static const char* getOpenCLErrorCodeStr(T input)
         * if checkVaul is used to check otherthan OpenCL API error code
         */
 template<typename T>
-static int checkVal(
+ int checkVal(
     T input,
     T reference,
     std::string message, bool isAPIerror = true)
@@ -278,7 +278,7 @@ static int checkVal(
  * @param deviceType deviceType
  * @return 0 if success else nonzero
  */
-static int displayDevices(cl_platform_id platform, cl_device_type deviceType)
+ int displayDevices(cl_platform_id platform, cl_device_type deviceType)
 {
     cl_int status;
     // Get platform name
@@ -320,7 +320,7 @@ static int displayDevices(cl_platform_id platform, cl_device_type deviceType)
  * @param deviceCount number of devices
  * @return 0 if success else nonzero
  */
-static int displayPlatformAndDevices(cl_platform_id platform,
+ int displayPlatformAndDevices(cl_platform_id platform,
                               const cl_device_id* device, const int deviceCount)
 {
     cl_int status;
@@ -350,7 +350,7 @@ static int displayPlatformAndDevices(cl_platform_id platform,
  * @param deviceCount device number
  * @return 0 if success else nonzero
  */
-static int validateDeviceId(int deviceId, int deviceCount)
+ int validateDeviceId(int deviceId, int deviceCount)
 {
     // Validate deviceIndex
     if(deviceId >= (int)deviceCount)
@@ -368,7 +368,7 @@ static int validateDeviceId(int deviceId, int deviceCount)
  * @param binaryData bifdata object
  * @return 0 if success else nonzero
  */
-static int generateBinaryImage(const bifData &binaryData)
+ int generateBinaryImage(const bifData &binaryData)
 {
     cl_int status = CL_SUCCESS;
     /*
@@ -603,7 +603,7 @@ static int generateBinaryImage(const bifData &binaryData)
  * @param platformIdEnabled if Platform option used
  * @return 0 if success else nonzero
  */
-static int getPlatform(cl_platform_id &platform, int platformId,
+ int getPlatform(cl_platform_id &platform, int platformId,
                 bool platformIdEnabled)
 {
     cl_uint numPlatforms;
@@ -656,7 +656,7 @@ static int getPlatform(cl_platform_id &platform, int platformId,
  * @param deviceIdEnabled if DeviceId option used
  * @return 0 if success else nonzero
  */
-static int getDevices(cl_context &context, cl_device_id **devices, int deviceId,
+ int getDevices(cl_context &context, cl_device_id **devices, int deviceId,
                bool deviceIdEnabled)
 {
     /* First, get the size of device list data */
@@ -702,7 +702,7 @@ static int getDevices(cl_context &context, cl_device_id **devices, int deviceId,
  * @param buildData buildProgramData Object
  * @return 0 if success else nonzero
  */
-static int buildOpenCLProgram(cl_program &program, const cl_context& context,
+ int buildOpenCLProgram(cl_program &program, const cl_context& context,
                        const buildProgramData &buildData)
 {
     cl_int status = CL_SUCCESS;
@@ -815,7 +815,7 @@ static int buildOpenCLProgram(cl_program &program, const cl_context& context,
  * @param event cl_event object
  * @return 0 if success else nonzero
  */
-static int waitForEventAndRelease(cl_event *event)
+ int waitForEventAndRelease(cl_event *event)
 {
     cl_int status = CL_SUCCESS;
     cl_int eventStatus = CL_QUEUED;
@@ -838,7 +838,7 @@ static int waitForEventAndRelease(cl_event *event)
  * getLocalThreads
  * get Local Threads number
  */
-static size_t getLocalThreads(size_t globalThreads, size_t maxWorkItemSize)
+ size_t getLocalThreads(size_t globalThreads, size_t maxWorkItemSize)
 {
     if(maxWorkItemSize < globalThreads)
     {

@@ -120,7 +120,7 @@ namespace appsdk
  * sdkVersionStr
  * struct to form AMD APP SDK version
  */
-static struct sdkVersionStr
+ struct sdkVersionStr
 {
     int major;      /**< SDK major release number */
     int minor;      /**< SDK minor release number */
@@ -174,7 +174,7 @@ struct Option
  * constant function, Prints error messages
  * @param errorMsg std::string message
  */
-static void error(std::string errorMsg)
+ void error(std::string errorMsg)
 {
     std::cout<<"Error: "<<errorMsg<<std::endl;
 }
@@ -184,7 +184,7 @@ static void error(std::string errorMsg)
  * constant function, Prints error messages
  * @param errorMsg char* message
  */
-static void expectedError(const char* errorMsg)
+ void expectedError(const char* errorMsg)
 {
     std::cout<<"Expected Error: "<<errorMsg<<std::endl;
 }
@@ -194,7 +194,7 @@ static void expectedError(const char* errorMsg)
  * constant function, Prints error messages
  * @param errorMsg string message
  */
-static void expectedError(std::string errorMsg)
+ void expectedError(std::string errorMsg)
 {
     std::cout<<"Expected Error: "<<errorMsg<<std::endl;
 }
@@ -208,7 +208,7 @@ static void expectedError(std::string errorMsg)
 * @param length number of values to compare
 * @param epsilon errorWindow
 */
-static bool compare(const float *refData, const float *data,
+ bool compare(const float *refData, const float *data,
              const int length, const float epsilon = 1e-6f)
 {
     float error = 0.0f;
@@ -228,7 +228,7 @@ static bool compare(const float *refData, const float *data,
     error = normError / normRef;
     return error < epsilon;
 }
-static bool compare(const double *refData, const double *data,
+ bool compare(const double *refData, const double *data,
              const int length, const double epsilon = 1e-6)
 {
     double error = 0.0;
@@ -254,10 +254,10 @@ static bool compare(const double *refData, const double *data,
  * Case insensitive compare of 2 strings
  * returns true when strings match(case insensitive), false otherwise
  */
-static bool strComparei(std::string a, std::string b)
+ bool strComparei(std::string a, std::string b)
 {
     int sizeA = (int)a.size();
-    if (b.size() != sizeA)
+    if (b.size() != a.size())
     {
         return false;
     }
@@ -290,7 +290,7 @@ std::string toString(T t, std::ios_base & (*r)(std::ios_base&) = std::dec)
  * @param str string message
  * @return 0 on success Positive if expected and Non-zero on failure
  */
-static int fileToString(std::string &fileName, std::string &str)
+ int fileToString(std::string &fileName, std::string &str)
 {
     size_t      size;
     char*       buf;
@@ -411,7 +411,7 @@ void printArray(
  * @param stats Statistic value of parameter
  * @param n number
  */
-static void printStatistics(std::string *statsStr, std::string * stats, int n)
+ void printStatistics(std::string *statsStr, std::string * stats, int n)
 {
     int *columnWidth = new int[n];
     if(columnWidth == NULL)
@@ -572,7 +572,7 @@ int isPowerOf2(T val)
         * getPath
         * @return path of the current directory
         */
-static std::string getPath()
+ std::string getPath()
 {
 #ifdef _WIN32
     char buffer[MAX_PATH];
@@ -611,7 +611,7 @@ static std::string getPath()
 * @brief Returns SDK Version string
 * @return std::string
 **********************************************************************/
-static std::string getSdkVerStr()
+ std::string getSdkVerStr()
 {
     char str[1024];
     std::string dbgStr("");

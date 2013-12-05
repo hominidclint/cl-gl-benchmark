@@ -447,7 +447,6 @@ int VecAdd::runCLKernels()
 namespace appsdk
 {
 
-
 int
 compileOpenCLProgram(cl_program &program, const cl_context& context,
                      buildProgramData &buildData)
@@ -507,7 +506,6 @@ compileOpenCLProgram(cl_program &program, const cl_context& context,
 
     return SDK_SUCCESS;
 }
-
 
 } // namespace appsdk
 

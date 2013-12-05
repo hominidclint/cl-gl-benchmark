@@ -16,7 +16,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 
 #include "NBody.hpp"
-#include <GL/glut.h>
+#include <GL/freeglut.h>
 #include <cmath>
 #include <malloc.h>
 
@@ -310,6 +310,7 @@ void NBody::releaseMappedParticlePositions()
     {
         cl_int status = clEnqueueUnmapMemObject(commandQueue,
                                                 particlePos[mappedPosBufferIndex], mappedPosBuffer, 0, NULL, NULL);
+        status = status;
         mappedPosBuffer = NULL;
         clFlush(commandQueue);
     }
@@ -365,6 +366,7 @@ NBody::initialize()
 {
     // Call base class Initialize to get default configuration
     int status = 0;
+    status = status;
     if (sampleArgs->initialize() != SDK_SUCCESS)
     {
         return SDK_FAILURE;
@@ -502,7 +504,7 @@ void displayfunc()
     for(int i = 0; i < numBodies; ++i,pos+=4)
     {
         //divided by 300 just for scaling
-        glVertex4f(*pos,*(pos+1),*(pos+2),300.0f);
+        glVertex4f(*pos,*(pos+1),*(pos+2),50.0f);
     }
     glEnd();
     nb->releaseMappedParticlePositions();
@@ -555,6 +557,7 @@ int
 NBody::run()
 {
     int status = 0;
+    status = status;
     // Arguments are set and execution call is enqueued on command buffer
     if(setupCLKernels() != SDK_SUCCESS)
     {

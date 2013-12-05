@@ -369,6 +369,7 @@ class SDKBitMap : public BitMapHeader, public BitMapInfoHeader
                 delete[] tmpPixels;
                 // Loaded file so record this fact
                 isLoaded_  = true;
+                val = val;
             }
         }
 

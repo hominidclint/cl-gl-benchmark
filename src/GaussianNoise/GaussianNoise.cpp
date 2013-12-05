@@ -170,7 +170,7 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
     {
         if (sampleArgs->isDeviceIdEnabled())
         {
-            if (i < sampleArgs->deviceId)
+            if (i < (int)sampleArgs->deviceId)
             {
                 continue;
             }
@@ -699,6 +699,7 @@ GaussianNoiseGL::setupCL()
     CHECK_OPENCL_ERROR(status, "clGetContextInfo failed.");
 
     int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));
+    deviceCount = deviceCount;
 
     devices = (cl_device_id *)malloc(deviceListSize);
     CHECK_ALLOCATION((devices), "Failed to allocate memory (devices).");

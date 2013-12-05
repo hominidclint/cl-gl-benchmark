@@ -46,7 +46,7 @@ namespace appsdk
  * Get current directory
  * @return string
  */
-static std::string getCurrentDir()
+ std::string getCurrentDir()
 {
     const   size_t  pathSize = 4096;
     char    currentDir[pathSize];
@@ -155,6 +155,7 @@ class SDKFile
                 return SDK_FAILURE;
             }
             val=fread(binary, sizeof(char), size, input);
+            val = val;
             fclose(input);
             source_.assign(binary, size);
             free(binary);
@@ -168,13 +169,13 @@ class SDKFile
         void replaceNewlineWithSpaces()
         {
             size_t pos = source_.find_first_of('\n', 0);
-            while(pos != -1)
+            while((int)pos != -1)
             {
                 source_.replace(pos, 1, " ");
                 pos = source_.find_first_of('\n', pos + 1);
             }
             pos = source_.find_first_of('\r', 0);
-            while(pos != -1)
+            while((int)pos != -1)
             {
                 source_.replace(pos, 1, " ");
                 pos = source_.find_first_of('\r', pos + 1);

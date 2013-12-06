@@ -225,13 +225,16 @@ AC_CONFIG_FILES([
 	Makefile
 	util/Makefile
 	src/Makefile
-	src/FFT/Makefile
-	src/GaussianNoise/Makefile
-	src/JuliaFractal/Makefile
-	src/MatMul/Makefile
-	src/NBody/Makefile
-	src/RayTracer/Makefile
-	src/VecAdd/Makefile
+	src/naive/Makefile
+	src/naive/FFT/Makefile
+	src/naive/GaussianNoise/Makefile
+	src/naive/MatMul/Makefile
+	src/naive/NBody/Makefile
+	src/optimized/Makefile
+	src/optimized/FFT/Makefile
+	src/optimized/GaussianNoise/Makefile
+	src/optimized/MatMul/Makefile
+	src/optimized/NBody/Makefile
 ])
 
 AC_OUTPUT()

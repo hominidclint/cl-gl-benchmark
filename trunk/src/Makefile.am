@@ -1,8 +1,3 @@
 SUBDIRS = \
-	FFT \
-	GaussianNoise \
-	JuliaFractal \
-	MatMul \
-	NBody \
-	RayTracer \
-	VecAdd
+	naive \
+	optimized

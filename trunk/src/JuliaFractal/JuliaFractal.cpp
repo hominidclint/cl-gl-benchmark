@@ -1,9 +1,0 @@
-#include <stdio.h>
-
-#include "JuliaFractal.hpp"
-
-int main(int argc, char const *argv[])
-{
-	printf("CL-GL Julia Fractal micro benchmark\n");
-	return 0;
-}

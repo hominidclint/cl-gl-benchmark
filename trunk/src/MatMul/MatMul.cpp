@@ -528,30 +528,6 @@ MatrixMultiplication::runCLKernels(void)
     return SDK_SUCCESS;
 }
 
-/* Data in matrix C is used as colors */
-float* MatrixMultiplication::getMappedColors()
-{
-    cl_int status;
-    mappedColorBuffer = (float*) clEnqueueMapBuffer(commandQueue,
-                      outputBuffer, CL_TRUE, CL_MAP_READ
-                      , 0, width0 * height1 * sizeof(float), 0, NULL, NULL, &status);
-    return mappedColorBuffer;
-}
-
-int MatrixMultiplication::releaseMappedColors()
-{
-    if (mappedColorBuffer)
-    {
-        cl_int status = clEnqueueUnmapMemObject(commandQueue,
-                                                outputBuffer, mappedColorBuffer, 0, NULL, NULL);
-        CHECK_ERROR(status,0, "clEnqueueUnmapMemObject failed");
-
-        mappedColorBuffer = NULL;
-        clFlush(commandQueue);
-    }
-    return 0;
-}
-
 /*
  * This is a naive O(N^3) CPU implementation of matrix multiplication
  */
@@ -648,6 +624,16 @@ MatrixMultiplication::initialize()
     sampleArgs->AddOption(appGflops_option);
     delete appGflops_option;
 
+    Option* displayGL = new Option;
+    CHECK_ALLOCATION(displayGL, "Memory Allocation error.\n");
+    displayGL->_sVersion = "ds";
+    displayGL->_lVersion = "displayGL";
+    displayGL->_description =
+        "Display GL";
+    displayGL->_type = CA_NO_ARGUMENT;
+    displayGL->_value = &display;
+    sampleArgs->AddOption(displayGL);
+    delete displayGL;
     return SDK_SUCCESS;
 }
 
@@ -702,8 +688,6 @@ MatrixMultiplication::setup()
 
     setupTime = (cl_double)sampleTimer->readTimer(timer);
 
-    display = !sampleArgs->quiet && !sampleArgs->verify;
-
     return SDK_SUCCESS;
 }
 
@@ -741,7 +725,7 @@ reShape(int w,int h)
     glViewport(0, 0, w, h);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    gluPerspective(45.0f, w/h, 1.0f, 1000.0f);
+    gluPerspective(45.0f, w/h, 1.0f, 100.0f);
     gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
 }
 
@@ -763,31 +747,32 @@ displayfunc()
     glDepthMask(GL_FALSE);
 
     MatrixMultiplication *matmul = (MatrixMultiplication *)me;
-    if (matmul->isFirstLuanch)
-    {
-        //Calling kernel for calculatig subsequent positions
-        matmul->runCLKernels();
-        matmul->isFirstLuanch = false;
-        return;
-    }
 
-
-    int numPixels = matmul->numElemC;
+    int numPixels = me->getWidth0() * me->getHeight1( 	);
     matmul->runCLKernels();
 
-    float* color = me->getOutput();
+    if(!me->sampleArgs->quiet)
+    {
+        printArray<cl_float>("Output", me->getOutput(), me->getWidth1(), 1);
+    }
+
+    float* r = me->getInput0();
+    float* g = me->getInput1();    
+    float* b = me->getOutput();
+
+    int scaling = 1000;
 
     glBegin(GL_POINTS);
-    int scaling = 1000;
     for(int i = 0; i < numPixels; ++i)
     {
 		// Set color
-	    glColor3f(color[i] / scaling, color[i] / scaling, color[i] / scaling);
+        // glColor3f(1.0, 0.0, 0.0);
+
+	    glColor3f(r[i], g[i], b[i]);
         //divided by 300 just for scaling
-        glVertex4f((i % me->getWidth0()) / scaling - 1.0, (i / me->getWidth0())/ scaling - 1.0, 0.0, 1.0);
+        glVertex4f((i % me->getWidth0()), (i / me->getWidth0()), 0.0, scaling);
+        // glVertex4f(output[i] -1.0, output[i] - 1.0, 0.0, 2 * scaling);
     }
-        glColor3f(1.0, 0.0, 0.0);
-		glVertex4f(0.0, 0.0, 0.0, 1.0);
     glEnd();
 
     //Calling kernel for calculating subsequent positions
@@ -1022,19 +1007,19 @@ main(int argc, char * argv[])
         {
             return SDK_FAILURE;
         }
-        // Run
-        if(clMatrixMultiplication.run() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
+        // // Run
+        // if(clMatrixMultiplication.run() != SDK_SUCCESS)
+        // {
+        //     return SDK_FAILURE;
+        // }
 
-        // VerifyResults
-        if(clMatrixMultiplication.verifyResults() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
+        // // VerifyResults
+        // if(clMatrixMultiplication.verifyResults() != SDK_SUCCESS)
+        // {
+        //     return SDK_FAILURE;
+        // }
 
-        clMatrixMultiplication.printStats();
+        // clMatrixMultiplication.printStats();
     }
 
     if(display)

@@ -465,10 +465,10 @@ int fillRandom(
         error("Cannot fill array. NULL pointer.");
         return SDK_FAILURE;
     }
-    if(!seed)
-    {
+    // if(!seed)
+    // {
         seed = (unsigned int)time(NULL);
-    }
+    // }
     srand(seed);
     double range = double(rangeMax - rangeMin) + 1.0;
     /* random initialisation of input */

@@ -54,7 +54,6 @@ int
 VecAdd::initializeCLP()
 {
     // Call base class Initialize to get default configuration
-    int status = 0;
     if (sampleArgs->initialize() != SDK_SUCCESS)
     {
         return SDK_FAILURE;
@@ -104,7 +103,7 @@ VecAdd::initializeGLAndGetCLContext(cl_platform_id platform,
     {
         if (sampleArgs->isDeviceIdEnabled())
         {
-            if (i < sampleArgs->deviceId)
+            if (i < (int)sampleArgs->deviceId)
             {
                 continue;
             }
@@ -323,7 +322,7 @@ VecAdd::setupCL()
                  &deviceListSize);
     CHECK_OPENCL_ERROR(status, "clGetContextInfo failed.");
 
-    int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));
+    // int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));
 
     devices = (cl_device_id *)malloc(deviceListSize);
     CHECK_ALLOCATION((devices), "Failed to allocate memory (devices).");
@@ -441,7 +440,7 @@ int VecAdd::runCLKernels()
 {
 
 
-
+  return 0;
 }
 
 namespace appsdk

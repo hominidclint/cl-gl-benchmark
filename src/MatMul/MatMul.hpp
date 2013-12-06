@@ -37,6 +37,8 @@ using namespace appsdk;
 
 class MatrixMultiplication
 {
+
+		/// Profiling
         cl_uint
         seed;                  /**< Seed value for random number generation */
         cl_double
@@ -45,6 +47,11 @@ class MatrixMultiplication
         appTime;                  /**< Time for transfer + kernel execution */
         cl_double
         kernelTime;                  /**< Time for kernel execution */
+        SDKTimer *sampleTimer;      /**< SDKTimer object */
+        int fpsTimer;
+        int timerNumFrames;        
+
+        /// Buffers
         cl_float              *input0;                  /**< Input array */
         cl_int                 width0;                  /**< width of input Array */
         cl_int                height0;                  /**< height of input Array */
@@ -53,6 +60,9 @@ class MatrixMultiplication
         cl_int                height1;                  /**< height of Input Array */
         cl_float              *output;                  /**< Output Array */
         cl_float  *verificationOutput;                  /**< Output array for reference implementation */
+        float *mappedColorBuffer;
+
+        /// Context stuff
         cl_uint
         blockSize;                  /**< Size of the block used for shared memory */
         cl_context            context;                  /**< CL context */
@@ -67,31 +77,24 @@ class MatrixMultiplication
         cl_program            program;                  /**< CL program  */
         cl_kernel              kernel;                  /**< CL kernel */
 
-        bool
-        lds;                  /**< Local data store availability */
+        bool        lds;                  /**< Local data store availability */
 
-        cl_int
-        n;                  /**< n height of matrix A and width of matrixB */
+        /// Dimension and others
+        cl_int        				n;                  /**< n height of matrix A and width of matrixB */
         cl_int                      m;                  /**< m width of matrix A */
         cl_int                      k;                  /**< k height of matrix B */
         size_t       globalThreads[2];                  /**< global NDRange */
         size_t        localThreads[2];                  /**< local Threads */
         cl_ulong availableLocalMemory;                  /**< Total Local Memory available for the kernel */
-        cl_ulong
-        neededLocalMemory;                  /**< Total Local Memory needed by the kernel */
+        cl_ulong neededLocalMemory;                  /**< Total Local Memory needed by the kernel */
         int
         iterations;                  /**< Number of iterations for kernel execution */
-        SDKDeviceInfo
-        deviceInfo;             /**< Structure to store device information*/
+        SDKDeviceInfo        deviceInfo;             /**< Structure to store device information*/
         KernelWorkGroupInfo
         kernelInfo;     /**< Structure to store kernel related info */
         bool eAppGFLOPS;
 
-        float *mappedColorBuffer;
 
-        SDKTimer *sampleTimer;      /**< SDKTimer object */
-        int fpsTimer;
-        int timerNumFrames;        
 
     public:
 
@@ -178,13 +181,14 @@ class MatrixMultiplication
             const cl_uint width,
             const cl_uint depth);
 
-        float* getMappedColors();
-        int releaseMappedColors();
-
-
         // Getters
         cl_float *getOutput() { return output; }
+        cl_float *getInput0() { return input0; }
+        cl_float *getInput1() { return input1; }
+
         int getWidth0() { return width0; }
+        int getHeight0() { return height0; }
+        int getWidth1() { return width1; }
         int getHeight1() { return height1; }
 
         /**

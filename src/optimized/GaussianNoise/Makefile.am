@@ -1,8 +1,8 @@
 if BUILD_BENCHMARK
 
-bin_PROGRAMS = $(top_builddir)/bin/GaussianNoise
+bin_PROGRAMS = $(top_builddir)/bin/optimized/GaussianNoise
 
-__top_builddir__bin_GaussianNoise_SOURCES = \
+__top_builddir__bin_optimized_GaussianNoise_SOURCES = \
 	GaussianNoise.cpp \
 	GaussianNoise.hpp
 	

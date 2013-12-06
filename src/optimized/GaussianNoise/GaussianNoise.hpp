@@ -14,24 +14,29 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ********************************************************************/
 
-#ifndef VECADD_H_
-#define VECADD_H_
+#ifndef GAUSSIAN_NOISE_GL_SEPARABLE_H_
+#define GAUSSIAN_NOISE_GL_SEPARABLE_H_
+#ifndef INPUT_IMAGE
+#define INPUT_IMAGE "GaussianNoiseGL_Input.bmp"
+#endif
+#define OUTPUT_SEPARABLE_IMAGE "GaussianNoiseGL_Output.bmp"
 
 #define GROUP_SIZE 64
+//#define FILTER_WIDTH 9
+#define FACTOR 60
 
 #define SAMPLE_VERSION "AMD-APP-SDK-v2.9.214.1"
 
-
 /**
-* VecAdd
-* Class implements OpenCL Vector Add
+* GaussianNoiseGL
+* Class implements OpenCL Gaussian Noise
 
 */
 
 #ifndef COMMON_DECLARE_HPP__
 #define COMMON_DECLARE_HPP__
 /**
-* This file contains the declaration for Vector Add sample.
+* This file contains the declaration for Gaussian Noise sample.
 */
 #ifdef _WIN32
 #include <windows.h>
@@ -89,23 +94,26 @@ static clGetGLContextInfoKHR_fn clGetGLContextInfoKHR;
 
 
 
-class VecAdd
+class GaussianNoiseGL
 {
     public:
-        static VecAdd *VecAddGL;
-
+        static GaussianNoiseGL *gaussianNoise;
         cl_double setupTime;                /**< time taken to setup OpenCL resources and building kernel */
         cl_double kernelTime;               /**< time taken to run kernel and read result back */
-
+        cl_uchar4* inputImageData;          /**< Input bitmap data to device */
+        cl_uchar4* outputImageData;         /**< Output from device */
         cl_context context;                 /**< CL context */
         cl_device_id *devices;              /**< CL device list */
+        cl_mem inputImageBuffer;            /**< CL memory buffer for input Image*/
+        cl_mem outputImageBuffer;           /**< CL memory buffer for Output Image*/
         cl_command_queue commandQueue;      /**< CL command queue */
         cl_program program;                 /**< CL program  */
         cl_kernel kernel;
-
-        cl_uint width;                      /**< Width of window */
-        cl_uint height;                     /**< Height of window */
-
+        SDKBitMap inputBitmap;   /**< Bitmap class object */
+        uchar4* pixelData;       /**< Pointer to image data */
+        cl_uint pixelSize;                  /**< Size of a pixel in BMP format> */
+        cl_uint width;                      /**< Width of image */
+        cl_uint height;                     /**< Height of image */
         size_t blockSizeX;                  /**< Work-group size in x-direction */
         size_t blockSizeY;                  /**< Work-group size in y-direction */
         int iterations;                     /**< Number of iterations for kernel execution */
@@ -114,12 +122,13 @@ class VecAdd
         int frameCount;
         int frameRefCount;
         double totalElapsedTime;
-
+        GLuint pbo;                         //pixel-buffer object to hold-image data
+        GLuint tex;                         //Texture to display
         cl_device_id interopDeviceId;
-
-        SDKDeviceInfo deviceInfo;                /**< Structure to store device information*/
+        SDKDeviceInfo
+        deviceInfo;                /**< Structure to store device information*/
         KernelWorkGroupInfo
-        kernelInfo;
+        kernelInfo;/* kernelInfoH,kernelInfoV*/;     /**< Structure to store kernel related info */
 
         SDKTimer    *sampleTimer;      /**< SDKTimer object */
 
@@ -128,16 +137,35 @@ class VecAdd
         CLCommandArgs   *sampleArgs;   /**< CLCommand argument class */
 
         /**
+        * Read bitmap image and allocate host memory
+        * @param inputImageName name of the input file
+        * @return SDK_SUCCESS on success and SDK_FAILURE on failure
+        */
+        int readInputImage(std::string inputImageName);
+
+        /**
+        * Write to an image file
+        * @param outputImageName name of the output file
+        * @return SDK_SUCCESS on success and SDK_FAILURE on failure
+        */
+        int writeOutputImage(std::string outputImageName);
+
+        /**
         * Constructor
         * Initialize member variables
+        * @param name name of sample (string)
         */
-        VecAdd()
+        GaussianNoiseGL()
+            :
+            inputImageData(NULL),
+            outputImageData(NULL)
         {
-            width = 800;
-            height = 600;
+            pixelSize = sizeof(uchar4);
+            pixelData = NULL;
             blockSizeX = GROUP_SIZE;
             blockSizeY = 1;
             iterations = 1;
+            factor=FACTOR;
             frameCount = 0;
             frameRefCount = 90;
             totalElapsedTime = 0.0;
@@ -147,14 +175,9 @@ class VecAdd
         }
 
 
-        ~VecAdd()
+        ~GaussianNoiseGL()
         {
         }
-
-        /**
-         * Generate random float number
-         */
-        float random(float randMax, float randMin);
 
         /**
          * Override from SDKSample, Generate binary image of given kernel
@@ -182,6 +205,28 @@ class VecAdd
                                         cl_context &context,
                                         cl_device_id &interopDevice);
 
+#ifdef _WIN32
+        /**
+         * enableGLAndGLContext
+         * creates a GL Context on a specified device and get its deviceId
+         * @param hWnd Window Handle
+         * @param hRC context of window
+         * @param platform cl_platform_id selected
+         * @param context associated cl_context
+         * @param interopDevice cl_device_id of selected device
+         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
+         */
+        int enableGLAndGetGLContext(HWND hWnd,
+                                    HDC &hDC,
+                                    HGLRC &hRC,
+                                    cl_platform_id platform,
+                                    cl_context &context,
+                                    cl_device_id &interopDevice);
+
+        void disableGL(HWND hWnd, HDC hDC, HGLRC hRC);
+#else
+
+#endif
         /**
         * Set values for kernels' arguments, enqueue calls to the kernels
         * on to the command queue, wait till end of kernel execution.
@@ -189,6 +234,12 @@ class VecAdd
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
         int runCLKernels();
+
+        /**
+        * Reference CPU implementation of Binomial Option
+        * for performance comparison
+        */
+        void GaussianNoiseCPUReference();
 
         /**
         * Override from SDKSample. Print sample stats.
@@ -200,7 +251,7 @@ class VecAdd
         * command line parser, add custom options
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
-        int initializeCLP();
+        int initialize();
 
         /**
         * Override from SDKSample, adjust width and height
@@ -211,7 +262,7 @@ class VecAdd
 
         /**
         * Override from SDKSample
-        * Run OpenCL Vec Add
+        * Run OpenCL Sobel Filter
         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
         */
         int run();
@@ -247,4 +298,4 @@ int compileOpenCLProgram(cl_program &program, const cl_context& context,
 
 
 }
-#endif // VECADD_H_
+#endif // GAUSSIAN_NOISE_GL_SEPARABLE_H_

@@ -14,16 +14,275 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ********************************************************************/
 
-#include <GL/freeglut.h>
+#include <unistd.h>
 
 #include "MatMul.hpp"
 
-
 MatrixMultiplication *me;           /**< Pointing to MatMul class */
-cl_bool display;
+
+/// Global variables for GL context 
+GLXContext gGlCtxSep;
+#define GLX_CONTEXT_MAJOR_VERSION_ARB           0x2091
+#define GLX_CONTEXT_MINOR_VERSION_ARB           0x2092
+typedef GLXContext (*GLXCREATECONTEXTATTRIBSARBPROC)(Display*, GLXFBConfig,
+        GLXContext, Bool, const int*);
+Window          winSep;
+Display         *displayNameSep;
+XEvent          xevSep;
+
+
+int MatrixMultiplication::clPrepareContext()
+{    
+    cl_int status = 0;
+    cl_device_type dType;
+
+    if(Args->deviceType.compare("cpu") == 0)
+    {
+        dType = CL_DEVICE_TYPE_CPU;
+    }
+    else //deviceType = "gpu"
+    {
+        dType = CL_DEVICE_TYPE_GPU;
+        if(Args->isThereGPU() == false)
+        {
+            std::cout << "GPU not found. Falling back to CPU device" << std::endl;
+            dType = CL_DEVICE_TYPE_CPU;
+        }
+    }
+
+    // Have a look at the available platforms and pick either
+    // the AMD one if available or a reasonable default.
+    int retValue = getPlatform(platform, Args->platformId,
+                               Args->isPlatformEnabled());
+    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
+
+    // Display available devices.
+    retValue = displayDevices(platform, dType);
+    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
+
+    // creating context
+    cl_context_properties cps[3] =
+    {
+        CL_CONTEXT_PLATFORM,
+        (cl_context_properties)platform,
+        0
+    };
+
+    context = clCreateContextFromType(
+                  cps,
+                  dType,
+                  NULL,
+                  NULL,
+                  &status);
+    CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed.");
+
+    // getting device on which to run the sample
+    status = getDevices(context, &devices, Args->deviceId,
+                        Args->isDeviceIdEnabled());
+    CHECK_ERROR(status, SDK_SUCCESS, "getDevices() failed");
+
+    // Set device info of given cl_device_id
+    retValue = deviceInfo.setDeviceInfo(devices[Args->deviceId]);
+    CHECK_ERROR(retValue, SDK_SUCCESS, "SDKDeviceInfo::setDeviceInfo() failed");
+
+    {
+        // The block is to move the declaration of prop closer to its use
+        cl_command_queue_properties prop = 0;
+
+        commandQueue = clCreateCommandQueue(
+                           context,
+                           devices[Args->deviceId],
+                           prop,
+                           &status);
+        CHECK_OPENCL_ERROR(status, "clCreateCommandQueue failed.");
+    }
+
+    return SDK_SUCCESS;
+}
+
+int MatrixMultiplication::clInitContextFromGL(cl_platform_id platform,
+        cl_context &context,
+        cl_device_id &interopDevice)
+{
+    cl_int status = SDK_SUCCESS;
+    displayNameSep = XOpenDisplay(NULL);
+    int screenNumber = ScreenCount(displayNameSep);
+    std::cout<<"Number of displays "<<screenNumber<<std::endl;
+    XCloseDisplay(displayNameSep);
+    for (int i = 0; i < screenNumber; i++)
+    {
+        if (Args->isDeviceIdEnabled())
+        {
+            if (i < (int)Args->deviceId)
+            {
+                continue;
+            }
+        }
+        char disp[100];
+        sprintf(disp, "DISPLAY=:0.%d", i);
+        putenv(disp);
+        displayNameSep = XOpenDisplay(0);
+        int nelements;
+
+        GLXFBConfig *fbc = glXChooseFBConfig(displayNameSep,
+                                             DefaultScreen(displayNameSep),
+                                             0,
+                                             &nelements);
+
+        static int attributeList[] = { GLX_RGBA,
+                                       GLX_DOUBLEBUFFER,
+                                       GLX_RED_SIZE,
+                                       1,
+                                       GLX_GREEN_SIZE,
+                                       1,
+                                       GLX_BLUE_SIZE,
+                                       1,
+                                       None
+                                     };
+        XVisualInfo *vi = glXChooseVisual(displayNameSep,
+                                          DefaultScreen(displayNameSep),
+                                          attributeList);
+        XSetWindowAttributes swa;
+        swa.colormap = XCreateColormap(displayNameSep,
+                                       RootWindow(displayNameSep, vi->screen),
+                                       vi->visual,
+                                       AllocNone);
+        swa.border_pixel = 0;
+        swa.event_mask = StructureNotifyMask;
+        winSep = XCreateWindow(displayNameSep,
+                               RootWindow(displayNameSep, vi->screen),
+                               10,
+                               10,
+                               m,
+                               k,
+                               0,
+                               vi->depth,
+                               InputOutput,
+                               vi->visual,
+                               CWBorderPixel|CWColormap|CWEventMask,
+                               &swa);
+
+        XMapWindow (displayNameSep, winSep);
+        std::cout << "glXCreateContextAttribsARB "
+                  << (void*) glXGetProcAddress((const GLubyte*)"glXCreateContextAttribsARB")
+                  << std::endl;
+        GLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB =
+            (GLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress((const GLubyte*)
+                    "glXCreateContextAttribsARB");
+
+        int attribs[] =
+        {
+            GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
+            GLX_CONTEXT_MINOR_VERSION_ARB, 0,
+            0
+        };
+
+        GLXContext ctx = glXCreateContextAttribsARB(displayNameSep,
+                         *fbc,
+                         0,
+                         true,
+                         attribs);
+        glXMakeCurrent (displayNameSep,
+                        winSep,
+                        ctx);
+        gGlCtxSep = glXGetCurrentContext();
+        cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
+                                          CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
+                                          CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
+                                        };
+        if (!clGetGLContextInfoKHR)
+        {
+            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
+                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
+            if (!clGetGLContextInfoKHR)
+            {
+                std::cout << "Failed to query proc address for clGetGLContextInfoKHR";
+            }
+        }
+
+        size_t deviceSize = 0;
+        status = clGetGLContextInfoKHR(cpsGL,
+                                       CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
+                                       0,
+                                       NULL,
+                                       &deviceSize);
+        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
+
+        int numDevices = (deviceSize / sizeof(cl_device_id));
+        std::cout<<"Number of interoperable devices "<<numDevices<<std::endl;
+        if(numDevices == 0)
+        {
+            glXDestroyContext(glXGetCurrentDisplay(), gGlCtxSep);
+            continue;
+        }
+        else
+        {
+            //Interoperable device found
+            std::cout<<"Interoperable device found "<<std::endl;
+            break;
+        }
+    }
+    cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
+                                      CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
+                                      CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
+                                    };
+    if (Args->deviceType.compare("gpu") == 0)
+    {
+        status = clGetGLContextInfoKHR( cpsGL,
+                                        CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
+                                        sizeof(cl_device_id),
+                                        &interopDeviceId,
+                                        NULL);
+        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
+
+        std::cout<<"Interop Device ID is "<<interopDeviceId<<std::endl;
+
+        // Create OpenCL context from device's id
+        context = clCreateContext(cpsGL,
+                                  1,
+                                  &interopDeviceId,
+                                  0,
+                                  0,
+                                  &status);
+        CHECK_OPENCL_ERROR(status, "clCreateContext failed.");
+    }
+    else
+    {
+        context = clCreateContextFromType(cpsGL,
+                                          CL_DEVICE_TYPE_CPU,
+                                          NULL,
+                                          NULL,
+                                          &status);
+        CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed!!");
+    }
+    // OpenGL animation code goes here
+    // GL init
+    glewInit();
+    if (! glewIsSupported("GL_VERSION_2_0 " "GL_ARB_pixel_buffer_object"))
+    {
+        std::cout << "Support for necessary OpenGL extensions missing."
+                  << std::endl;
+        return SDK_FAILURE;
+    }
+
+    glEnable(GL_TEXTURE_2D);
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    glDisable(GL_DEPTH_TEST);
+
+    glViewport(0, 0, m, k);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(
+        60.0,
+        (GLfloat)m / (GLfloat)k,
+        0.1,
+        10.0);
+    return SDK_SUCCESS;
+}
 
 int
-MatrixMultiplication::setupMatrixMultiplication()
+MatrixMultiplication::glSetupData()
 {
     // allocate and init memory used by host  input0[width0][height0]
     cl_uint inputSizeBytes0 = width0 * height0 * sizeof(cl_float);
@@ -48,7 +307,7 @@ MatrixMultiplication::setupMatrixMultiplication()
     CHECK_ALLOCATION(output, "Failed to allocate host memory. (output)");
 
     // allocate memory for output[width1][height0] of reference implementation
-    if(sampleArgs->verify)
+    if(Args->verify)
     {
         verificationOutput = (cl_float *) malloc(outputSizeBytes);
         CHECK_ALLOCATION(verificationOutput,
@@ -57,7 +316,7 @@ MatrixMultiplication::setupMatrixMultiplication()
     }
 
     // Unless quiet mode has been enabled, print the INPUT arrays
-    if(!sampleArgs->quiet)
+    if(!Args->quiet)
     {
         printArray<cl_float>(
             "Input0",
@@ -74,106 +333,14 @@ MatrixMultiplication::setupMatrixMultiplication()
     return SDK_SUCCESS;
 }
 
-/**
- * genBinary Image function is used to when we want to create the binary
- * for the kernel and run it at a later time. This is useful where offline
- * compilation is the preferred mechanism.
- */
 int
-MatrixMultiplication::genBinaryImage()
+MatrixMultiplication::clSetupData(void)
 {
-    bifData binaryData;
-    binaryData.kernelName = std::string("MatrixMultiplication_Kernels.cl");
-    binaryData.flagsStr = std::string("");
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
 
-    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
-    int status = generateBinaryImage(binaryData);
-    return status;
-}
-
-
-
-int
-MatrixMultiplication::setupCL(void)
-{
-    cl_int status = 0;
-    cl_device_type dType;
-
-    if(sampleArgs->deviceType.compare("cpu") == 0)
-    {
-        dType = CL_DEVICE_TYPE_CPU;
-    }
-    else //deviceType = "gpu"
-    {
-        dType = CL_DEVICE_TYPE_GPU;
-        if(sampleArgs->isThereGPU() == false)
-        {
-            std::cout << "GPU not found. Falling back to CPU device" << std::endl;
-            dType = CL_DEVICE_TYPE_CPU;
-        }
-    }
-
-    /*
-     * Have a look at the available platforms and pick either
-     * the AMD one if available or a reasonable default.
-     */
-    cl_platform_id platform = NULL;
-    int retValue = getPlatform(platform, sampleArgs->platformId,
-                               sampleArgs->isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
-
-    // Display available devices.
-    retValue = displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
-
-    // creating context
-    cl_context_properties cps[3] =
-    {
-        CL_CONTEXT_PLATFORM,
-        (cl_context_properties)platform,
-        0
-    };
-
-    context = clCreateContextFromType(
-                  cps,
-                  dType,
-                  NULL,
-                  NULL,
-                  &status);
-    CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed.");
-
-    // getting device on which to run the sample
-    status = getDevices(context, &devices, sampleArgs->deviceId,
-                        sampleArgs->isDeviceIdEnabled());
-    CHECK_ERROR(status, SDK_SUCCESS, "getDevices() failed");
-
-    //Set device info of given cl_device_id
-    retValue = deviceInfo.setDeviceInfo(devices[sampleArgs->deviceId]);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "SDKDeviceInfo::setDeviceInfo() failed");
-
-    {
-        // The block is to move the declaration of prop closer to its use
-        cl_command_queue_properties prop = 0;
-        if(!eAppGFLOPS)
-        {
-            prop |= CL_QUEUE_PROFILING_ENABLE;
-        }
-
-        commandQueue = clCreateCommandQueue(
-                           context,
-                           devices[sampleArgs->deviceId],
-                           prop,
-                           &status);
-        CHECK_OPENCL_ERROR(status, "clCreateCommandQueue failed.");
-    }
-
+    cl_int status;
     // Set Presistent memory only for AMD platform
     cl_mem_flags inMemFlags = CL_MEM_READ_ONLY;
-    if(sampleArgs->isAmdPlatform())
+    if(Args->isAmdPlatform())
     {
         inMemFlags |= CL_MEM_USE_PERSISTENT_MEM_AMD;
     }
@@ -204,23 +371,30 @@ MatrixMultiplication::setupCL(void)
                        &status);
     CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (outputBuffer)");
 
+    return SDK_SUCCESS;
+}
+
+int MatrixMultiplication::clSetupProgram()
+{
+    cl_int status;
+
     // create a CL program using the kernel source
     buildProgramData buildData;
     buildData.kernelName = std::string("MatrixMultiplication_Kernels.cl");
     buildData.devices = devices;
-    buildData.deviceId = sampleArgs->deviceId;
+    buildData.deviceId = Args->deviceId;
     buildData.flagsStr = std::string("");
-    if(sampleArgs->isLoadBinaryEnabled())
+    if(Args->isLoadBinaryEnabled())
     {
-        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
+        buildData.binaryName = std::string(Args->loadBinary.c_str());
     }
 
-    if(sampleArgs->isComplierFlagsSpecified())
+    if(Args->isComplierFlagsSpecified())
     {
-        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
+        buildData.flagsFileName = std::string(Args->flags.c_str());
     }
 
-    retValue = buildOpenCLProgram(program, context, buildData);
+    int retValue = buildOpenCLProgram(program, context, buildData);
     CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
 
     // If local memory is present then use the specific kernel
@@ -233,7 +407,8 @@ MatrixMultiplication::setupCL(void)
         kernel = clCreateKernel(program, "mmmKernel", &status);
     }
     CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
-    return SDK_SUCCESS;
+
+    return SDK_SUCCESS;    
 }
 
 int
@@ -251,7 +426,7 @@ MatrixMultiplication::setWorkGroupSize()
 
     // Setting the KernelWorkGroupInfo values
     status = kernelInfo.setKernelWorkGroupInfo(kernel,
-             devices[sampleArgs->deviceId]);
+             devices[Args->deviceId]);
     CHECK_ERROR(status,0, "setKernelWrkGroupInfo failed");
 
     availableLocalMemory = deviceInfo.localMemSize - kernelInfo.localMemoryUsed;
@@ -461,32 +636,6 @@ MatrixMultiplication::runCLKernels(void)
         CHECK_OPENCL_ERROR(status, "clGetEventInfo failed.");
     }
 
-    if(!eAppGFLOPS)
-    {
-        // Calculate performance
-        cl_ulong startTime;
-        cl_ulong endTime;
-
-        // Get kernel profiling info
-        status = clGetEventProfilingInfo(ndrEvt,
-                                         CL_PROFILING_COMMAND_START,
-                                         sizeof(cl_ulong),
-                                         &startTime,
-                                         0);
-        CHECK_OPENCL_ERROR(status, "clGetEventProfilingInfo failed.(startTime)");
-
-        status = clGetEventProfilingInfo(ndrEvt,
-                                         CL_PROFILING_COMMAND_END,
-                                         sizeof(cl_ulong),
-                                         &endTime,
-                                         0);
-        CHECK_OPENCL_ERROR(status, "clGetEventProfilingInfo failed.(endTime)");
-
-        // Print performance numbers
-        double sec = 1e-9 * (endTime - startTime);
-        kernelTime += sec;
-    }
-
     status = clReleaseEvent(ndrEvt);
     CHECK_OPENCL_ERROR(status, "clReleaseEvent failed. (ndrEvt)");
 
@@ -553,10 +702,10 @@ MatrixMultiplication::matrixMultiplicationCPUReference(
 }
 
 int
-MatrixMultiplication::initialize()
+MatrixMultiplication::InitCmdParser()
 {
     // Call base class Initialize to get default configuration
-    if(sampleArgs->initialize() != SDK_SUCCESS)
+    if(Args->initialize() != SDK_SUCCESS)
     {
         return SDK_FAILURE;
     }
@@ -569,7 +718,7 @@ MatrixMultiplication::initialize()
     xParam->_description = "height of matrix A";
     xParam->_type     = CA_ARG_INT;
     xParam->_value    = &n;
-    sampleArgs->AddOption(xParam);
+    Args->AddOption(xParam);
     delete xParam;
 
     Option* yParam = new Option;
@@ -579,7 +728,7 @@ MatrixMultiplication::initialize()
     yParam->_description = "width of matrix A and Height of matrix B";
     yParam->_type     = CA_ARG_INT;
     yParam->_value    = &m;
-    sampleArgs->AddOption(yParam);
+    Args->AddOption(yParam);
     delete yParam;
 
     Option* zParam = new Option;
@@ -589,7 +738,7 @@ MatrixMultiplication::initialize()
     zParam->_description = "width of matrix B";
     zParam->_type     = CA_ARG_INT;
     zParam->_value    = &k;
-    sampleArgs->AddOption(zParam);
+    Args->AddOption(zParam);
     delete zParam;
 
     Option* blockSizeParam = new Option;
@@ -600,7 +749,7 @@ MatrixMultiplication::initialize()
         "Use local memory of dimensions blockSize x blockSize";
     blockSizeParam->_type     = CA_ARG_INT;
     blockSizeParam->_value    = &blockSize;
-    sampleArgs->AddOption(blockSizeParam);
+    Args->AddOption(blockSizeParam);
     delete blockSizeParam;
 
     Option* num_iterations = new Option;
@@ -610,19 +759,8 @@ MatrixMultiplication::initialize()
     num_iterations->_description = "Number of iterations for kernel execution";
     num_iterations->_type = CA_ARG_INT;
     num_iterations->_value = &iterations;
-    sampleArgs->AddOption(num_iterations);
+    Args->AddOption(num_iterations);
     delete num_iterations;
-
-    Option* appGflops_option = new Option;
-    CHECK_ALLOCATION(appGflops_option, "Memory Allocation error.\n");
-    appGflops_option->_sVersion = "";
-    appGflops_option->_lVersion = "eAppGflops";
-    appGflops_option->_description =
-        "Prints GFLOPS calculated from transfer + kernel time";
-    appGflops_option->_type = CA_NO_ARGUMENT;
-    appGflops_option->_value = &eAppGFLOPS;
-    sampleArgs->AddOption(appGflops_option);
-    delete appGflops_option;
 
     Option* displayGL = new Option;
     CHECK_ALLOCATION(displayGL, "Memory Allocation error.\n");
@@ -632,13 +770,13 @@ MatrixMultiplication::initialize()
         "Display GL";
     displayGL->_type = CA_NO_ARGUMENT;
     displayGL->_value = &display;
-    sampleArgs->AddOption(displayGL);
+    Args->AddOption(displayGL);
     delete displayGL;
     return SDK_SUCCESS;
 }
 
 int
-MatrixMultiplication::setup()
+MatrixMultiplication::Setup()
 {
     // Validation of input values
     if((n == 0) || (m == 0) || (k == 0))
@@ -670,152 +808,13 @@ MatrixMultiplication::setup()
     width1  = k;
     height1 = m;
 
-    if(setupMatrixMultiplication()!=SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
+    /// Create CL-GL context
+    clPrepareContext();
+    clInitContextFromGL(platform, context, interopDeviceId);
 
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
 
-    if(setupCL()!=SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    sampleTimer->stopTimer(timer);
-
-    setupTime = (cl_double)sampleTimer->readTimer(timer);
 
     return SDK_SUCCESS;
-}
-
-/**
-* @brief Initialize GL
-*/
-void
-GLInit()
-{
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-}
-
-/**
-* @brief Glut Idle function
-*/
-void
-idle()
-{
-    glutPostRedisplay();
-}
-
-/**
-* @brief Glut reshape func
-*
-* @param w width of OpenGL window
-* @param h height of OpenGL window
-*/
-void
-reShape(int w,int h)
-{
-    glViewport(0, 0, w, h);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    gluPerspective(45.0f, w/h, 1.0f, 100.0f);
-    gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
-}
-
-/**
-* @brief OpenGL display function
-*/
-void 
-displayfunc()
-{
-    static int numFrames = 0;
-
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-
-    glPointSize(1.0);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glEnable(GL_BLEND);
-    glDepthMask(GL_FALSE);
-
-    MatrixMultiplication *matmul = (MatrixMultiplication *)me;
-
-    int numPixels = me->getWidth0() * me->getHeight1( 	);
-    matmul->runCLKernels();
-
-    if(!me->sampleArgs->quiet)
-    {
-        printArray<cl_float>("Output", me->getOutput(), me->getWidth1(), 1);
-    }
-
-    float* r = me->getInput0();
-    float* g = me->getInput1();    
-    float* b = me->getOutput();
-
-    int scaling = 1000;
-
-    glBegin(GL_POINTS);
-    for(int i = 0; i < numPixels; ++i)
-    {
-		// Set color
-        // glColor3f(1.0, 0.0, 0.0);
-
-	    glColor3f(r[i], g[i], b[i]);
-        //divided by 300 just for scaling
-        glVertex4f((i % me->getWidth0()), (i / me->getWidth0()), 0.0, scaling);
-        // glVertex4f(output[i] -1.0, output[i] - 1.0, 0.0, 2 * scaling);
-    }
-    glEnd();
-
-    //Calling kernel for calculating subsequent positions
-    glFlush();
-    glutSwapBuffers();
-
-    numFrames++;
-    // update window title with FPS
-    if (numFrames >= 100)
-    {
-        char buf[256];
-        sprintf(buf, "MatrixMultiplication - %d pixels, %.02f FPS"
-                , matmul->numElemC, (float)matmul->getFPS());
-        glutSetWindowTitle(buf);
-        numFrames = 0;
-    }
-}
-
-// keyboard function
-void
-keyboardFunc(unsigned char key, int mouseX, int mouseY)
-{
-    switch(key)
-    {
-        // If the user hits escape or Q, then exit
-
-        // ESCAPE_KEY = 27
-    case 27:
-    case 'q':
-    case 'Q':
-    {
-        if(me->cleanup() != SDK_SUCCESS)
-        {
-            exit(1);
-        }
-        else
-        {
-            exit(0);
-        }
-    }
-    default:
-        break;
-    }
 }
 
 int
@@ -831,15 +830,10 @@ MatrixMultiplication::run()
         }
     }
 
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
     std::cout << "Executing kernel for " << iterations << " iterations" <<
               std::endl;
     std::cout << "-------------------------------------------" << std::endl;
 
-    kernelTime = 0;
     for(int i = 0; i < iterations; i++)
     {
         // Arguments are set and execution call is enqueued on command buffer
@@ -850,11 +844,7 @@ MatrixMultiplication::run()
         }
     }
 
-    sampleTimer->stopTimer(timer);
-    appTime = (double)(sampleTimer->readTimer(timer)) / iterations;
-    kernelTime = kernelTime / iterations;
-
-    if(!sampleArgs->quiet)
+    if(!Args->quiet)
     {
         printArray<cl_float>("Output", output, width1, 1);
     }
@@ -865,7 +855,7 @@ MatrixMultiplication::run()
 int
 MatrixMultiplication::verifyResults()
 {
-    if(sampleArgs->verify)
+    if(Args->verify)
     {
         // reference implementation
         matrixMultiplicationCPUReference(verificationOutput, input0, input1, height0,
@@ -890,55 +880,6 @@ MatrixMultiplication::verifyResults()
 void
 MatrixMultiplication::printStats()
 {
-    if(sampleArgs->timing)
-    {
-        if(eAppGFLOPS)
-        {
-            std::string strArray[4] = {"MatrixA", "MatrixB", "Time(sec)", "[Transfer+kernel]Time(sec)"};
-            std::string stats[4];
-
-            double flops = 2 * width0 * width1;
-            double perf = (flops / appTime) * height0 * 1e-9;
-            if(sampleArgs->timing)
-            {
-                std::cout << "GFlops achieved : " << perf << std::endl << std::endl;
-            }
-
-            sampleTimer->totalTime = setupTime + appTime;
-
-            stats[0]  = toString(height0, std::dec)
-                        +"x"+toString(width0, std::dec);
-            stats[1]  = toString(height1, std::dec)
-                        +"x"+toString(width1, std::dec);
-            stats[2]  = toString(sampleTimer->totalTime, std::dec);
-            stats[3]  = toString(appTime, std::dec);
-
-            printStatistics(strArray, stats, 4);
-        }
-        else
-        {
-            std::string strArray[4] = {"MatrixA", "MatrixB", "Time(sec)", "kernelTime(sec)"};
-            std::string stats[4];
-
-            double flops = 2 * width0 * width1;
-            double perf = (flops / kernelTime) * height0 * 1e-9;
-            if(sampleArgs->timing)
-            {
-                std::cout << "GFlops achieved : " << perf << std::endl << std::endl;
-            }
-
-            sampleTimer->totalTime = setupTime + kernelTime;
-
-            stats[0]  = toString(height0, std::dec)
-                        +"x"+toString(width0, std::dec);
-            stats[1]  = toString(height1, std::dec)
-                        +"x"+toString(width1, std::dec);
-            stats[2]  = toString(sampleTimer->totalTime, std::dec);
-            stats[3]  = toString(kernelTime, std::dec);
-
-            printStatistics(strArray, stats, 4);
-        }
-    }
 }
 
 int
@@ -979,67 +920,156 @@ MatrixMultiplication::cleanup()
     return SDK_SUCCESS;
 }
 
+
+/**
+* @brief Initialize GL
+*/
+void
+glInit()
+{
+    glClearColor(0.0 ,0.0, 0.0, 0.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+}
+
+/**
+* @brief Glut Idle function
+*/
+void
+glIdleFunc()
+{
+    glutPostRedisplay();
+}
+
+/**
+* @brief Glut reshape func
+*
+* @param w width of OpenGL window
+* @param h height of OpenGL window
+*/
+void
+glReshapeFunc(int w,int h)
+{
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluPerspective(45.0f, w/h, 1.0f, 100.0f);
+    gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
+}
+
+/**
+* @brief OpenGL display function
+*/
+void 
+glDisplayFunc()
+{
+    glClearColor(0.0 ,0.0, 0.0, 0.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    glPointSize(1.0);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glEnable(GL_BLEND);
+    glDepthMask(GL_FALSE);
+
+
+    int numPixels = me->getWidth0() * me->getHeight1();
+    
+    me->runCLKernels();
+
+    if(!me->Args->quiet)
+    {
+        printArray<cl_float>("Output", me->getOutput(), me->getWidth1(), 1);
+    }
+
+    float* r = me->getInput0();
+    float* g = me->getInput1();    
+    float* b = me->getOutput();
+
+    int scaling = 1000;
+
+    glBegin(GL_POINTS);
+    for(int i = 0; i < numPixels; ++i)
+    {
+        // Set color
+        // glColor3f(1.0, 0.0, 0.0);
+
+        glColor3f(r[i], g[i], b[i]);
+        //divided by 300 just for scaling
+        glVertex4f((i % me->getWidth0()), (i / me->getWidth0()), 0.0, scaling);
+        // glVertex4f(output[i] -1.0, output[i] - 1.0, 0.0, 2 * scaling);
+    }
+    glEnd();
+
+    //Calling kernel for calculating subsequent positions
+    glFlush();
+    glutSwapBuffers();
+}
+
+// keyboard function
+void
+glKeyboardFunc(unsigned char key, int mouseX, int mouseY)
+{
+    switch(key)
+    {
+        // If the user hits escape or Q, then exit
+
+        // ESCAPE_KEY = 27
+    case 27:
+    case 'q':
+    case 'Q':
+    {
+        if(me->cleanup() != SDK_SUCCESS)
+        {
+            exit(1);
+        }
+        else
+        {
+            exit(0);
+        }
+    }
+    default:
+        break;
+    }
+}
+
 int
 main(int argc, char * argv[])
 {
-    MatrixMultiplication clMatrixMultiplication;
-    me = &clMatrixMultiplication;
+    MatrixMultiplication Matmul;
+    me = &Matmul;
 
-    if(clMatrixMultiplication.initialize() != SDK_SUCCESS)
-    {
+    if(Matmul.InitCmdParser() != SDK_SUCCESS)
         return SDK_FAILURE;
-    }
 
-    if(clMatrixMultiplication.sampleArgs->parseCommandLine(argc,
+    if(Matmul.Args->parseCommandLine(argc,
             argv) != SDK_SUCCESS)
-    {
         return SDK_FAILURE;
-    }
 
-    if(clMatrixMultiplication.sampleArgs->isDumpBinaryEnabled() != SDK_SUCCESS)
-    {
-        return clMatrixMultiplication.genBinaryImage();
-    }
-    else
-    {
-        // Setup
-        if(clMatrixMultiplication.setup() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-        // // Run
-        // if(clMatrixMultiplication.run() != SDK_SUCCESS)
-        // {
-        //     return SDK_FAILURE;
-        // }
+    // Setup 
+    if(Matmul.Setup() != SDK_SUCCESS)
+        return SDK_FAILURE;
 
-        // // VerifyResults
-        // if(clMatrixMultiplication.verifyResults() != SDK_SUCCESS)
-        // {
-        //     return SDK_FAILURE;
-        // }
-
-        // clMatrixMultiplication.printStats();
-    }
-
-    if(display)
+    if(Matmul.getDisplay())
     {
         // Run in  graphical window if requested
         glutInit(&argc, argv);
         glutInitWindowPosition(100,10);
-        glutInitWindowSize(me->getWidth0(),me->getHeight1());
+        glutInitWindowSize(Matmul.getWidth0(),Matmul.getHeight1());
         glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
         glutCreateWindow("MatMul");
-        GLInit();
-        glutDisplayFunc(displayfunc);
-        glutReshapeFunc(reShape);
-        glutIdleFunc(idle);
-        glutKeyboardFunc(keyboardFunc);
+        glInit();
+        glutDisplayFunc(glDisplayFunc);
+        glutReshapeFunc(glReshapeFunc);
+        glutIdleFunc(glIdleFunc);
+        glutKeyboardFunc(glKeyboardFunc);
         glutMainLoop();
     }
 
     // Cleanup
-    if(clMatrixMultiplication.cleanup() != SDK_SUCCESS)
+    if(Matmul.cleanup() != SDK_SUCCESS)
     {
         return SDK_FAILURE;
     }

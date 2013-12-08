@@ -282,7 +282,7 @@ int MatrixMultiplication::clInitContextFromGL(cl_platform_id platform,
 }
 
 int
-MatrixMultiplication::glSetupData()
+MatrixMultiplication::glPrepareData()
 {
     // allocate and init memory used by host  input0[width0][height0]
     cl_uint inputSizeBytes0 = width0 * height0 * sizeof(cl_float);
@@ -303,7 +303,7 @@ MatrixMultiplication::glSetupData()
     // allocate memory for output[width1][height0]
     cl_uint outputSizeBytes = height0 * width1 * sizeof(cl_float);
 
-    output = (cl_float *) malloc(outputSizeBytes);
+    output = (cl_float *)calloc(1, outputSizeBytes);
     CHECK_ALLOCATION(output, "Failed to allocate host memory. (output)");
 
     // allocate memory for output[width1][height0] of reference implementation
@@ -334,42 +334,63 @@ MatrixMultiplication::glSetupData()
 }
 
 int
-MatrixMultiplication::clSetupData(void)
+MatrixMultiplication::glSetupData()
 {
+    /// VAO
+    glGenVertexArrays(1, &vao_id);
+    glBindVertexArray(vao_id);
 
+    /// VBOs
+    glGenBuffers(1, &vbo_ma);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_ma);
+    glBufferData(GL_ARRAY_BUFFER, width0 * height0 * sizeof(cl_float), input0, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+
+    glGenBuffers(1, &vbo_mb);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_mb);
+    glBufferData(GL_ARRAY_BUFFER, width1 * height1 * sizeof(cl_float), input1, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(1);
+
+    glGenBuffers(1, &vbo_mc);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_mc);
+    glBufferData(GL_ARRAY_BUFFER, width1 * height0 * sizeof(cl_float), output, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 1, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(2);
+
+    // Return
+    return SDK_SUCCESS;
+}
+
+int
+MatrixMultiplication::clPrepareBuffer(void)
+{
     cl_int status;
-    // Set Presistent memory only for AMD platform
-    cl_mem_flags inMemFlags = CL_MEM_READ_ONLY;
-    if(Args->isAmdPlatform())
-    {
-        inMemFlags |= CL_MEM_USE_PERSISTENT_MEM_AMD;
-    }
 
-    // Create buffer for matrix A
-    inputBuffer0 = clCreateBuffer(
+    // Create buffer for matrix A from vbo_a
+    inputBuffer0 = clCreateFromGLBuffer(
                        context,
-                       inMemFlags,
-                       sizeof(cl_float) * width0 * height0,
-                       0,
+                       CL_MEM_READ_ONLY,
+                       vbo_ma,
                        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputBuffer0)");
+    CHECK_OPENCL_ERROR(status, "clCreateFromGLBuffer failed. (inputBuffer0)");
 
-    // Create buffer for matrix B
-    inputBuffer1 = clCreateBuffer(
+    // Create buffer for matrix B from vbo_b
+    inputBuffer1 = clCreateFromGLBuffer(
                        context,
-                       inMemFlags,
-                       sizeof(cl_float) * width1 * height1,
-                       0,
+                       CL_MEM_READ_ONLY,
+                       vbo_mb,
                        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputBuffer1)");
+    CHECK_OPENCL_ERROR(status, "clCreateFromGLBuffer failed. (inputBuffer1)");
 
-    outputBuffer = clCreateBuffer(
+    // Create buffer for matrix C from vbo_c
+    outputBuffer = clCreateFromGLBuffer(
                        context,
                        CL_MEM_WRITE_ONLY | CL_MEM_ALLOC_HOST_PTR,
-                       sizeof(cl_float) * height0 * width1,
-                       0,
+                       vbo_mc,
                        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (outputBuffer)");
+    CHECK_OPENCL_ERROR(status, "clCreateFromGLBuffer failed. (outputBuffer)");
 
     return SDK_SUCCESS;
 }
@@ -384,35 +405,29 @@ int MatrixMultiplication::clSetupProgram()
     buildData.devices = devices;
     buildData.deviceId = Args->deviceId;
     buildData.flagsStr = std::string("");
+
     if(Args->isLoadBinaryEnabled())
-    {
         buildData.binaryName = std::string(Args->loadBinary.c_str());
-    }
 
     if(Args->isComplierFlagsSpecified())
-    {
         buildData.flagsFileName = std::string(Args->flags.c_str());
-    }
 
     int retValue = buildOpenCLProgram(program, context, buildData);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
+    CHECK_ERROR(retValue, SDK_SUCCESS, "clSetupProgram() failed");
 
     // If local memory is present then use the specific kernel
     if(lds)
-    {
         kernel = clCreateKernel(program, "mmmKernel_local", &status);
-    }
     else
-    {
         kernel = clCreateKernel(program, "mmmKernel", &status);
-    }
+
     CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
 
     return SDK_SUCCESS;    
 }
 
 int
-MatrixMultiplication::setWorkGroupSize()
+MatrixMultiplication::clSetWorkGroupSize()
 {
     /*
      * Kernel runs over complete output matrix with blocks of blockSize x blockSize
@@ -480,82 +495,57 @@ int
 MatrixMultiplication::runCLKernels(void)
 {
     cl_int   status;
-    status = setWorkGroupSize();
-    CHECK_ERROR(status, SDK_SUCCESS, "getWorkGroupSize() failed");
+    status = clSetWorkGroupSize();
+    CHECK_ERROR(status, SDK_SUCCESS, "clSetWorkGroupSize() failed");
 
-    cl_event ndrEvt;
-    cl_int eventStatus = CL_QUEUED;
+    // Prepare Buffer from GL
+    clPrepareBuffer();
 
-
-    // Set input data to matrix A and matrix B
-    cl_event inMapEvt1, inMapEvt2, inUnmapEvt1, inUnmapEvt2, outMapEvt, outUnmapEvt;
-    void* mapPtr1 = clEnqueueMapBuffer(
-                        commandQueue,
-                        inputBuffer0,
-                        CL_FALSE,
-                        CL_MAP_WRITE,
-                        0,
-                        width0 * height0 * sizeof(cl_float),
-                        0,
-                        NULL,
-                        &inMapEvt1,
-                        &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (inputBuffer0)");
-
-    void* mapPtr2 = clEnqueueMapBuffer(
-                        commandQueue,
-                        inputBuffer1,
-                        CL_FALSE,
-                        CL_MAP_WRITE,
-                        0,
-                        width1 * height1 * sizeof(cl_float),
-                        0,
-                        NULL,
-                        &inMapEvt2,
-                        &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (inputBuffer1)");
+    // Acquire GL buffer for inputBuffer 0
+    cl_event acquireEvt;
+    status = clEnqueueAcquireGLObjects(commandQueue,
+                                       1,
+                                       &inputBuffer0,
+                                       0,
+                                       NULL,
+                                       &acquireEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueAcquireGLObjects failed.");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    // random initialisation of input
-    fillRandom<cl_float>(input0, width0, height0, 0, 1);
-    fillRandom<cl_float>(input1, width1, height1, 0, 1);
+    status = waitForEventAndRelease(&acquireEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(acquireEvt) Failed");
 
-    status = waitForEventAndRelease(&inMapEvt1);
-    CHECK_ERROR(status,SDK_SUCCESS, "WaitForEventAndRelease(inMapEvt1) Failed");
-    memcpy(mapPtr1, input0, sizeof(cl_float) * width0  * height0);
-
-    status = waitForEventAndRelease(&inMapEvt2);
-    CHECK_ERROR(status,SDK_SUCCESS, "WaitForEventAndRelease(inMapEvt2) Failed");
-    memcpy(mapPtr2, input1, sizeof(cl_float) * width1  * height1);
-
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 inputBuffer0,
-                 mapPtr1,
-                 0,
-                 NULL,
-                 &inUnmapEvt1);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (inputBuffer0)");
-
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 inputBuffer1,
-                 mapPtr2,
-                 0,
-                 NULL,
-                 &inUnmapEvt2);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (inputBuffer1)");
+    // Acquire GL buffer for inputBuffer 1
+    status = clEnqueueAcquireGLObjects(commandQueue,
+                                       1,
+                                       &inputBuffer1,
+                                       0,
+                                       NULL,
+                                       &acquireEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueAcquireGLObjects failed.");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = waitForEventAndRelease(&inUnmapEvt1);
-    CHECK_ERROR(status, SDK_SUCCESS, "waitForEventAndRelease(inUnmapEvt1) failed");
+    status = waitForEventAndRelease(&acquireEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(acquireEvt) Failed");
 
-    status = waitForEventAndRelease(&inUnmapEvt2);
-    CHECK_ERROR(status,SDK_SUCCESS, "waitForEventAndRelease(inUnmapEvt2) failed");
+    // Acquire GL buffer for outputBuffer
+    status = clEnqueueAcquireGLObjects(commandQueue,
+                                       1,
+                                       &outputBuffer,
+                                       0,
+                                       NULL,
+                                       &acquireEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueAcquireGLObjects failed.");
+
+    status = clFlush(commandQueue);
+    CHECK_OPENCL_ERROR(status, "clFlush failed.");
+
+    status = waitForEventAndRelease(&acquireEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(acquireEvt) Failed");
 
     // Set appropriate arguments to the kernel
 
@@ -607,6 +597,7 @@ MatrixMultiplication::runCLKernels(void)
         CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (width1)");
     }
 
+    cl_event ndrEvt;
     // Enqueue a kernel run call
     status = clEnqueueNDRangeKernel(
                  commandQueue,
@@ -624,7 +615,7 @@ MatrixMultiplication::runCLKernels(void)
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
     // wait for the kernel call to finish execution
-    eventStatus = CL_QUEUED;
+    cl_int eventStatus = CL_QUEUED;
     while(eventStatus != CL_COMPLETE)
     {
         status = clGetEventInfo(
@@ -639,40 +630,52 @@ MatrixMultiplication::runCLKernels(void)
     status = clReleaseEvent(ndrEvt);
     CHECK_OPENCL_ERROR(status, "clReleaseEvent failed. (ndrEvt)");
 
-    void* outMapPtr = clEnqueueMapBuffer(
-                          commandQueue,
-                          outputBuffer,
-                          CL_FALSE,
-                          CL_MAP_READ,
-                          0,
-                          width1 * height0 * sizeof(cl_float),
-                          0,
-                          NULL,
-                          &outMapEvt,
-                          &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (outputBuffer)");
+    cl_event releaseGLEvt;
+
+    // GL gets control of the memory object inputBuffer0 aka vbo_a
+    status = clEnqueueReleaseGLObjects(commandQueue,
+                                       1,
+                                       &inputBuffer0,
+                                       0,
+                                       NULL,
+                                       &releaseGLEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueReleaseGLObjects failed.");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = waitForEventAndRelease(&outMapEvt);
-    CHECK_ERROR(status,0, "waitForEventAndRelease(outMapEvt) failed");
-    memcpy(output, outMapPtr, sizeof(cl_float) * width1  * height0);
+    status = waitForEventAndRelease(&releaseGLEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(releaseGLEvt) Failed");
 
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 outputBuffer,
-                 outMapPtr,
-                 0,
-                 NULL,
-                 &outUnmapEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (outputBuffer)");
+    // GL gets control of the memory object inputBuffer1, aka vbo_b
+    status = clEnqueueReleaseGLObjects(commandQueue,
+                                       1,
+                                       &inputBuffer1,
+                                       0,
+                                       NULL,
+                                       &releaseGLEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueReleaseGLObjects failed.");
 
     status = clFlush(commandQueue);
     CHECK_OPENCL_ERROR(status, "clFlush failed.");
 
-    status = waitForEventAndRelease(&outUnmapEvt);
-    CHECK_ERROR(status,0, "waitForEventAndRelease(outUnmapEvt) failed");
+    status = waitForEventAndRelease(&releaseGLEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(releaseGLEvt) Failed");
+
+    // GL gets control of the memory object outputBuffer, aka vbo_c
+    status = clEnqueueReleaseGLObjects(commandQueue,
+                                       1,
+                                       &outputBuffer,
+                                       0,
+                                       NULL,
+                                       &releaseGLEvt);
+    CHECK_OPENCL_ERROR(status, "clEnqueueReleaseGLObjects failed.");
+
+    status = clFlush(commandQueue);
+    CHECK_OPENCL_ERROR(status, "clFlush failed.");
+
+    status = waitForEventAndRelease(&releaseGLEvt);
+    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(releaseGLEvt) Failed");
 
     return SDK_SUCCESS;
 }

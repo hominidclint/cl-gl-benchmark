@@ -119,10 +119,12 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
             cl_device_id &interopDevice);
 
         /// GL
+        int glPrepareData();
         int glSetupData();
         int glSetupProgram();
 
         /// CL
+        int clPrepareBuffer();
         int clSetupData();
         int clSetupProgram();
 
@@ -160,7 +162,7 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
          * Function to compute local WorkGroup Size based on inputs
          * and device properties
          */
-         int setWorkGroupSize();
+         int clSetWorkGroupSize();
 
         /**
          * OpenCL related initialisations.

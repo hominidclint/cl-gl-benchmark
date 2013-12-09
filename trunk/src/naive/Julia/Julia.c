@@ -580,6 +580,11 @@ SetupComputeDevices(int gpu)
 
 	cl_uint numPlatforms;
 	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
 
 	if (0 < numPlatforms)
 	{

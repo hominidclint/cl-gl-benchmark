@@ -105,6 +105,7 @@ then
 	[
 		AC_LANG_PROGRAM(
 			[[#include <CL/cl.h>]],
+			[[#include <CL/cl_gl.h>]],
 			[[
 				cl_int ret;
 				cl_platform_id platform;

@@ -279,39 +279,6 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
             break;
         }
     }
-    cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
-                                      CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
-                                      CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
-                                    };
-    if (sampleArgs->deviceType.compare("gpu") == 0)
-    {
-        status = clGetGLContextInfoKHR( cpsGL,
-                                        CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
-                                        sizeof(cl_device_id),
-                                        &interopDeviceId,
-                                        NULL);
-        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
-
-        std::cout<<"Interop Device ID is "<<interopDeviceId<<std::endl;
-
-        // Create OpenCL context from device's id
-        context = clCreateContext(cpsGL,
-                                  1,
-                                  &interopDeviceId,
-                                  0,
-                                  0,
-                                  &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContext failed.");
-    }
-    else
-    {
-        context = clCreateContextFromType(cpsGL,
-                                          CL_DEVICE_TYPE_CPU,
-                                          NULL,
-                                          NULL,
-                                          &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed!!");
-    }
     // OpenGL animation code goes here
     // GL init
     glewInit();

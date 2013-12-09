@@ -92,7 +92,7 @@ int MatrixMultiplication::clPrepareContext(int argc, char **argv)
     CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
 
     // Init Context
-    clInitContextFromGL(argc, argv);
+    // clInitContextFromGL(argc, argv);
 
     // getting device on which to run the sample
     // First, get the size of device list data
@@ -143,58 +143,187 @@ int MatrixMultiplication::clInitContextFromGL(int argc, char **argv)
 {
 	cl_int status;
 
-	glutInit(&argc, argv);
+	// glutInit(&argc, argv);
 
-	glutInitWindowPosition(100,10);
-	glutInitWindowSize(getWidth0(),getHeight1());
-	glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
-	glutCreateWindow("MatMul");	
+	// glutInitWindowPosition(100,10);
+	// glutInitWindowSize(getWidth0(),getHeight1());
+	// glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
+	// glutCreateWindow("MatMul");	
 
-	// glutInitContextVersion(4, 3);
-	// glutInitContextFlags(GLUT_FORWARD_COMPATIBLE);
-	// glutInitContextProfile(GLUT_CORE_PROFILE);
+	// // glutInitContextVersion(4, 3);
+	// // glutInitContextFlags(GLUT_FORWARD_COMPATIBLE);
+	// // glutInitContextProfile(GLUT_CORE_PROFILE);
 
-	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE,
-			GLUT_ACTION_GLUTMAINLOOP_RETURNS);
+	// glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE,
+	// 		GLUT_ACTION_GLUTMAINLOOP_RETURNS);
 
-	glutInitWindowSize(m, k);
+	// glutInitWindowSize(m, k);
 
-	glutInitDisplayMode(GLUT_DEPTH | GLUT_DOUBLE | GLUT_RGBA);
+	// glutInitDisplayMode(GLUT_DEPTH | GLUT_DOUBLE | GLUT_RGBA);
 
-	int window_handle = glutCreateWindow("MatMul");
+	// int window_handle = glutCreateWindow("MatMul");
 
-	if (window_handle < 1)
-	{
-		fprintf(stderr, "ERROR: Could not create a new rendering window.\n");
-		exit(EXIT_FAILURE);
-	}
+	// if (window_handle < 1)
+	// {
+	// 	fprintf(stderr, "ERROR: Could not create a new rendering window.\n");
+	// 	exit(EXIT_FAILURE);
+	// }
 
-	// GL init
-	glewInit();
-	if (! glewIsSupported("GL_VERSION_2_0 " "GL_ARB_pixel_buffer_object"))
-	{
-		std::cout << "Support for necessary OpenGL extensions missing."
-		<< std::endl;
-		return SDK_FAILURE;
-	}
+	// // GL init
+	// glewInit();
+	// if (! glewIsSupported("GL_VERSION_2_0 " "GL_ARB_pixel_buffer_object"))
+	// {
+	// 	std::cout << "Support for necessary OpenGL extensions missing."
+	// 	<< std::endl;
+	// 	return SDK_FAILURE;
+	// }
 
-	glClearColor(0.0, 0.0, 0.0, 1.0);
-	glDisable(GL_DEPTH_TEST);
+	// glClearColor(0.0, 0.0, 0.0, 1.0);
+	// glDisable(GL_DEPTH_TEST);
 
-	glViewport(0, 0, m, k);
+	// glViewport(0, 0, m, k);
 
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
-	gluPerspective(
-		60.0,
-		(GLfloat)m / (GLfloat)k,
-		0.1,
-		10.0);
+	// glMatrixMode(GL_PROJECTION);
+	// glLoadIdentity();
+	// gluPerspective(
+	// 	60.0,
+	// 	(GLfloat)m / (GLfloat)k,
+	// 	0.1,
+	// 	10.0);
+
+    status = SDK_SUCCESS;
+    displayNameSep = XOpenDisplay(NULL);
+    int screenNumber = ScreenCount(displayNameSep);
+    std::cout<<"Number of displays "<<screenNumber<<std::endl;
+    XCloseDisplay(displayNameSep);
+    for (int i = 0; i < screenNumber; i++)
+    {
+        if (Args->isDeviceIdEnabled())
+        {
+            if (i < (int)Args->deviceId)
+            {
+                continue;
+            }
+        }
+        char disp[100];
+        sprintf(disp, "DISPLAY=:0.%d", i);
+        putenv(disp);
+        displayNameSep = XOpenDisplay(0);
+        int nelements;
+
+        GLXFBConfig *fbc = glXChooseFBConfig(displayNameSep,
+                                             DefaultScreen(displayNameSep),
+                                             0,
+                                             &nelements);
+
+        static int attributeList[] = { GLX_RGBA,
+                                       GLX_DOUBLEBUFFER,
+                                       GLX_RED_SIZE,
+                                       1,
+                                       GLX_GREEN_SIZE,
+                                       1,
+                                       GLX_BLUE_SIZE,
+                                       1,
+                                       None
+                                     };
+        XVisualInfo *vi = glXChooseVisual(displayNameSep,
+                                          DefaultScreen(displayNameSep),
+                                          attributeList);
+        XSetWindowAttributes swa;
+        swa.colormap = XCreateColormap(displayNameSep,
+                                       RootWindow(displayNameSep, vi->screen),
+                                       vi->visual,
+                                       AllocNone);
+        swa.border_pixel = 0;
+        swa.event_mask = StructureNotifyMask;
+        winSep = XCreateWindow(displayNameSep,
+                               RootWindow(displayNameSep, vi->screen),
+                               10,
+                               10,
+                               getWidth1(),
+                               getHeight0(),
+                               0,
+                               vi->depth,
+                               InputOutput,
+                               vi->visual,
+                               CWBorderPixel|CWColormap|CWEventMask,
+                               &swa);
+
+        XMapWindow (displayNameSep, winSep);
+        std::cout << "glXCreateContextAttribsARB "
+                  << (void*) glXGetProcAddress((const GLubyte*)"glXCreateContextAttribsARB")
+                  << std::endl;
+        GLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB =
+            (GLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress((const GLubyte*)
+                    "glXCreateContextAttribsARB");
+
+        int attribs[] =
+        {
+            GLX_CONTEXT_MAJOR_VERSION_ARB, 4,
+            GLX_CONTEXT_MINOR_VERSION_ARB, 3,
+            0
+        };
+
+        GLXContext ctx = glXCreateContextAttribsARB(displayNameSep,
+                         *fbc,
+                         0,
+                         true,
+                         attribs);
+        glXMakeCurrent (displayNameSep,
+                        winSep,
+                        ctx);
+        gGlCtxSep = glXGetCurrentContext();
+        cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
+                                          CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
+                                          CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
+                                        };
+        if (!clGetGLContextInfoKHR)
+        {
+            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
+                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
+            if (!clGetGLContextInfoKHR)
+            {
+                std::cout << "Failed to query proc address for clGetGLContextInfoKHR";
+            }
+        }
+
+        size_t deviceSize = 0;
+        status = clGetGLContextInfoKHR(cpsGL,
+                                       CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
+                                       0,
+                                       NULL,
+                                       &deviceSize);
+        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
+
+        int numDevices = (deviceSize / sizeof(cl_device_id));
+        std::cout<<"Number of interoperable devices "<<numDevices<<std::endl;
+        if(numDevices == 0)
+        {
+            glXDestroyContext(glXGetCurrentDisplay(), gGlCtxSep);
+            continue;
+        }
+        else
+        {
+            //Interoperable device found
+            std::cout<<"Interoperable device found "<<std::endl;
+            break;
+        }
+    }
 
     cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
                                       CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
                                       CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
                                     };
+    if (!clGetGLContextInfoKHR)
+    {
+        clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
+                                clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
+        if (!clGetGLContextInfoKHR)
+        {
+            std::cout << "Failed to query proc address for clGetGLContextInfoKHR";
+        }
+    }
+
     if (Args->deviceType.compare("gpu") == 0)
     {
         status = clGetGLContextInfoKHR( cpsGL,

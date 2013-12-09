@@ -2,4 +2,5 @@ SUBDIRS = \
 	FFT \
 	GaussianNoise \
 	MatMul \
-	NBody
+	NBody \
+	Julia

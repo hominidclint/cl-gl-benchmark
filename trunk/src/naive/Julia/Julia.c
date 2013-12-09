@@ -61,6 +61,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -158,11 +159,12 @@ DivideUp(int a, int b)
 static long
 GetCurrentTime()
 {
-	struct timeval tv;
+	// struct timeval tv;
 
-	gettimeofday(&tv, NULL);
+	// gettimeofday(&tv, NULL);
 
-	return tv.tv_usec;
+	// return tv.tv_usec;
+	return time(NULL);
 }
 
 static double 

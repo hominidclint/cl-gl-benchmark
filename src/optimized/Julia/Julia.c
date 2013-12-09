@@ -61,6 +61,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -158,11 +159,12 @@ DivideUp(int a, int b)
 static long
 GetCurrentTime()
 {
-    struct timeval tv;
+    // struct timeval tv;
 
-    gettimeofday(&tv, NULL);
+    // gettimeofday(&tv, NULL);
 
-    return tv.tv_usec;
+    // return tv.tv_usec;
+    return time(NULL);
 }
 
 static double 
@@ -643,9 +645,48 @@ SetupComputeDevices(int gpu)
 
 #else
 
-    // Locate a compute device
-    //
-    err = clGetDeviceIDs(NULL, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+    // Bind to platform
+    cl_platform_id platform_id;
+
+    cl_uint numPlatforms;
+    cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+    if (status != CL_SUCCESS)
+    {
+        printf("clGetPlatformIDs Failed\n");
+        return EXIT_FAILURE;
+    }
+
+    if (0 < numPlatforms)
+    {
+        cl_platform_id* platforms = calloc(numPlatforms, sizeof(cl_platform_id));
+
+        status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+        char platformName[100];
+        for (unsigned i = 0; i < numPlatforms; ++i)
+        {
+            status = clGetPlatformInfo(platforms[i],
+                CL_PLATFORM_VENDOR,
+                sizeof(platformName),
+                platformName,
+                NULL);
+            platform_id = platforms[i];
+            if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+            {
+                break;
+            }
+        }
+        printf("Platform found : %s\n", platformName);
+        free(platforms);
+    }
+    if(NULL == platform_id)
+    {
+        printf("NULL platform found so Exiting Application.\n");
+        return EXIT_FAILURE;
+    }
+
+    // Get ID for the device
+    err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
     if (err != CL_SUCCESS)
     {
         printf("Error: Failed to locate compute device!\n");

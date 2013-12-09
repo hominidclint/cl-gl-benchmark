@@ -577,8 +577,52 @@ SetupComputeDevices(int gpu)
 
     // Bind to platform
     cl_platform_id platform_id;
-    clGetPlatformIDs(1, &platform_id, NULL);
-  
+
+    cl_uint numPlatforms;
+    cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+    if (status != CL_SUCCESS)
+    {
+        printf("clGetPlatformIDs Failed\n");
+        return EXIT_FAILURE;
+    }
+
+    if (0 < numPlatforms)
+    {
+        cl_platform_id* platforms = calloc(numPlatforms, sizeof(cl_platform_id));
+
+        status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+        char platformName[100];
+        for (unsigned i = 0; i < numPlatforms; ++i)
+        {
+            status = clGetPlatformInfo(platforms[i],
+                CL_PLATFORM_VENDOR,
+                sizeof(platformName),
+                platformName,
+                NULL);
+            platform_id = platforms[i];
+            if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+            {
+                break;
+            }
+        }
+        printf("Platform found : %s\n", platformName);
+        free(platforms);
+    }
+    if(NULL == platform_id)
+    {
+        printf("NULL platform found so Exiting Application.\n");
+        return EXIT_FAILURE;
+    }
+
+    // Get ID for the device
+    err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+    if (err != CL_SUCCESS)
+    {
+        printf("Error: Failed to locate compute device!\n");
+        return EXIT_FAILURE;
+    }
+
     // Create a context  
     cl_context_properties properties[] =
     {
@@ -590,7 +634,7 @@ SetupComputeDevices(int gpu)
 
     // Create a context from a CGL share group
     //
-    ComputeContext = clCreateContext(properties, 0, 0, NULL, 0, 0);
+    ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
     if (!ComputeContext)
     {
         printf("Error: Failed to create a compute context!\n");

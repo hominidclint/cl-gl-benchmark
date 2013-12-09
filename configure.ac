@@ -228,11 +228,13 @@ AC_CONFIG_FILES([
 	src/naive/Makefile
 	src/naive/FFT/Makefile
 	src/naive/GaussianNoise/Makefile
+	src/naive/Julia/Makefile
 	src/naive/MatMul/Makefile
 	src/naive/NBody/Makefile
 	src/optimized/Makefile
 	src/optimized/FFT/Makefile
 	src/optimized/GaussianNoise/Makefile
+	src/optimized/Julia/Makefile
 	src/optimized/MatMul/Makefile
 	src/optimized/NBody/Makefile
 ])

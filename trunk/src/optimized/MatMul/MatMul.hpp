@@ -66,6 +66,7 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
         cl_int                 width1;                  /**< width of Input Array */
         cl_int                height1;                  /**< height of Input Array */
         cl_float              *output;                  /**< Output Array */
+        cl_float          *output_pos;
         cl_float  *verificationOutput;                  /**< Output array for reference implementation */
         float      *mappedColorBuffer;
 
@@ -99,36 +100,26 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
         KernelWorkGroupInfo kernelInfo;                 /**< Structure to store kernel related info */
 
         /// GL VAO and VBOs
-        GLuint                 vao_id;                 // This VAO contains below 3 VBOs
-        GLuint                 vbo_ma;                 // Containing data for Matrix A
-        GLuint                 vbo_mb;                 // Containing data for Matrix B
-        GLuint                 vbo_mc;                 // Containing data for Matrix C
+        GLuint                 vao_id;                  /**< This VAO contains VBOs */
+        GLuint                 vbo_ma;                  /**< Containing data for Matrix A */
+        GLuint                 vbo_mb;                  /**< Containing data for Matrix B */
+        GLuint                 vbo_mc;                  /**< Containing data for Matrix C */
+        GLuint                vbo_pos;                  /**< Containing data for position */
 
         /// GL Shaders
         GLuint       vertex_shader_id;
         GLuint     fragment_shader_id;
 
+        /// GL Program
+        GLuint          gl_program_id;
+
         /// Flags
         bool                      lds;                  /**< Local data store availability */
-        bool                  display;                  /**< Visualization availability */
-
-        /// CL-GL interoperable context
-        int clPrepareContext();
-        int clInitContextFromGL(cl_platform_id platform, 
-            cl_context &context,
-            cl_device_id &interopDevice);
-
-        /// GL
-        int glPrepareData();
-        int glSetupData();
-        int glSetupProgram();
-
-        /// CL
-        int clPrepareBuffer();
-        int clSetupData();
-        int clSetupProgram();
+        bool                  display;                  /**< Visualization flag */
 
     public:
+
+        bool                first_run;
 
         CLCommandArgs   *Args;   /**< CLCommand argument class */
 
@@ -150,64 +141,57 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
             k = 600;
             blockSize = 8;
             lds = 0;
+            first_run = true;
         }
 
-        /**
-         * Allocate and initialize host memory array with random values
-         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
-         */
-         int setupMatrixMultiplication();
+        // Getters
+        cl_float *getOutput() { return output; }
+        cl_float *getInput0() { return input0; }
+        cl_float *getInput1() { return input1; }
 
-        /**
-         * Function to compute local WorkGroup Size based on inputs
-         * and device properties
-         */
-         int clSetWorkGroupSize();
+        int getWidth0() { return width0; }
+        int getHeight0() { return height0; }
+        int getWidth1() { return width1; }
+        int getHeight1() { return height1; }
+        bool getDisplay() { return display; }
 
-        /**
-         * OpenCL related initialisations.
-         * Set up Context, Device list, Command Queue, Memory buffers
-         * Build CL kernel program executable
-         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
-         */
-         int setupCL();
+        /// CL-GL interoperable context
+        int clPrepareContext(int argc, char **argv);
+        int clInitContextFromGL(int argc, char **argv);
+        int clFreeContext();
 
-        /**
-         * Set values for kernels' arguments, enqueue calls to the kernels
-         * on to the command queue, wait till end of kernel execution.
-         * Get kernel start and end time if timing is enabled
-         * @return SDK_SUCCESS on success and SDK_FAILURE on failure
-         */
-         int runCLKernels();
+        /// GL
+        int glFreeContext();
 
-        /**
-         * Reference CPU implementation of Matrix Multiplication
-         * @param output stores the output of the multiplied matrices depthxheight
-         * @param input0 input matrix of size width x height
-         * @param input1 input matrix of size depth x width
-         * @param height height of the output matrix
-         * @param width  length of the common dimension of the matrices input0 and input1
-         * @param depth  width  of the output matrix
-         */
-         void matrixMultiplicationCPUReference(
+        int glPrepareInput();
+        int glSetupInput();
+        int glFreeInput();
+
+        int glPrepareOutput();
+        int glSetupOutput();
+        int glFreeOutput();
+
+        int glFreeBuffers();
+
+        int glSetupProgram();
+        int glFreeProgram();
+
+        /// CL
+        int clPrepareBuffer();
+        int clFreeBuffer();
+        int clSetupData();
+        int clSetupProgram();
+        int clFreeProgram();
+        int clSetWorkGroupSize();
+        int clKernelRun();
+
+        void matrixMultiplicationCPUReference(
             cl_float * output,
             cl_float * input0,
             cl_float * input1,
             const cl_uint height,
             const cl_uint width,
             const cl_uint depth);
-
-        // Getters
-         cl_float *getOutput() { return output; }
-         cl_float *getInput0() { return input0; }
-         cl_float *getInput1() { return input1; }
-
-         int getWidth0() { return width0; }
-         int getHeight0() { return height0; }
-         int getWidth1() { return width1; }
-         int getHeight1() { return height1; }
-         bool getDisplay() { return display; }
-
 
         /**
          * Override from SDKSample. Print sample stats.
@@ -226,7 +210,7 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
          * of execution domain, perform all sample setup
          * @return SDK_SUCCESS on success and SDK_FAILURE on failure
          */
-         int Setup();
+         int Setup(int argc, char **argv);
 
         /**
          * Override from SDKSample
@@ -240,14 +224,14 @@ typedef CL_API_ENTRY cl_int (CL_API_CALL *clGetGLContextInfoKHR_fn)(
          * Cleanup memory allocations
          * @return SDK_SUCCESS on success and SDK_FAILURE on failure
          */
-         int cleanup();
+         int Cleanup();
 
         /**
          * Override from SDKSample
          * Verify against reference implementation
          * @return SDK_SUCCESS on success and SDK_FAILURE on failure
          */
-         int verifyResults();
+         int VerifyResults();
 
     };
 

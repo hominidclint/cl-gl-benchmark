@@ -1,1048 +1,1173 @@
-/**********************************************************************
-Copyright ©2013 Advanced Micro Devices, Inc. All rights reserved.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// OpenCL Kernel taken from AMDAPPSDK
+// Program Structure from APPLE QJulia
+// Remixed by Xiang
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 
-•   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-•   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
- other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
- DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-********************************************************************/
-
+#include <GL/gl.h>
+#include <GL/glx.h>
 #include <GL/freeglut.h>
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
 
-#include "MatMul.hpp"
+////////////////////////////////////////////////////////////////////////////////
 
+#define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
+#define DEBUG_INFO                      (0)     
+#define COMPUTE_KERNEL_FILENAME         ("MatrixMultiplication_Kernels.cl")
+#define COMPUTE_KERNEL_MATMUL_NAME      ("mmmKernel")
+#define COMPUTE_KERNEL_MATMUL_LDS_NAME  ("mmmKernel")
+#define SEPARATOR                       ("----------------------------------------------------------------------\n")
+#define WIDTH                           (512)
+#define HEIGHT                          (512)
 
-MatrixMultiplication *me;           /**< Pointing to MatMul class */
-cl_bool display;
+////////////////////////////////////////////////////////////////////////////////
 
-int
-MatrixMultiplication::setupMatrixMultiplication()
+static cl_context                       ComputeContext;
+static cl_command_queue                 ComputeCommands;
+static cl_kernel                        ComputeKernel;
+static cl_program                       ComputeProgram;
+static cl_device_id                     ComputeDeviceId;
+static cl_device_type                   ComputeDeviceType;
+static cl_mem                           ComputeMatrixA;
+static cl_mem                           ComputeMatrixB;
+static cl_mem                           ComputeMatrixC;
+static cl_mem                           ComputeImage;
+static size_t                           MaxWorkGroupSize;
+static int                              WorkGroupSize[2];
+static int                              WorkGroupItems = 32;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int Width0                       = 512;
+static int Height0                      = 512;
+static int Width1                       = 512;
+static int Height1                      = 512;
+
+static int Width                        = Width1;
+static int Height                       = Height0;
+
+static int Animated                     = 0;
+static int Update                       = 1;
+static int Lds                          = 0;
+
+static float *Input0                    = NULL;
+static float *Input1                    = NULL;
+static float *Output                    = NULL;
+
+static int BlockSize                    = 8;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static uint TextureId                   = 0;
+static uint TextureTarget               = GL_TEXTURE_2D;
+static uint TextureInternal             = GL_RGBA;
+static uint TextureFormat               = GL_RGBA;
+static uint TextureType                 = GL_UNSIGNED_BYTE;
+static uint TextureWidth                = WIDTH;
+static uint TextureHeight               = HEIGHT;
+static size_t TextureTypeSize           = sizeof(char);
+static uint ActiveTextureUnit           = GL_TEXTURE1_ARB;
+static void* HostImageBuffer            = 0;
+
+static double TimeElapsed               = 0;
+static int FrameCount                   = 0;
+static uint ReportStatsInterval         = 30;
+
+static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
+static float HighlightTextColor[4]      = { 0.9f, 0.9f, 0.9f, 1.0f };
+static uint TextOffset[2]               = { 25, 25 };
+
+static uint ShowStats                   = 1;
+static char StatsString[512]            = "\0";
+static uint ShowInfo                    = 1;
+static char InfoString[512]             = "\0";
+
+static float VertexPos[4][2]            = { { -1.0f, -1.0f },
+{ +1.0f, -1.0f },
+{ +1.0f, +1.0f },
+{ -1.0f, +1.0f } };
+static float TexCoords[4][2];
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+DivideUp(int a, int b) 
 {
-    // allocate and init memory used by host  input0[width0][height0]
-    cl_uint inputSizeBytes0 = width0 * height0 * sizeof(cl_float);
-
-    input0 = (cl_float *) malloc(inputSizeBytes0);
-    CHECK_ALLOCATION(input0, "Failed to allocate host memory. (input0)");
-
-    // allocate and init memory used by host input1[width1][height1]
-    cl_uint inputSizeBytes1 = width1 * height1 * sizeof(cl_float);
-
-    input1 = (cl_float *) malloc(inputSizeBytes1);
-    CHECK_ALLOCATION(input1, "Failed to allocate host memory. (input1)");
-
-    // random initialisation of input
-    fillRandom<cl_float>(input0, width0, height0, 0, 1);
-    fillRandom<cl_float>(input1, width1, height1, 0, 1);
-
-    // allocate memory for output[width1][height0]
-    cl_uint outputSizeBytes = height0 * width1 * sizeof(cl_float);
-
-    output = (cl_float *) malloc(outputSizeBytes);
-    CHECK_ALLOCATION(output, "Failed to allocate host memory. (output)");
-
-    // allocate memory for output[width1][height0] of reference implementation
-    if(sampleArgs->verify)
-    {
-        verificationOutput = (cl_float *) malloc(outputSizeBytes);
-        CHECK_ALLOCATION(verificationOutput,
-                         "Failed to allocate host memory. (verificationOutput)");
-        memset(verificationOutput, 0, outputSizeBytes);
-    }
-
-    // Unless quiet mode has been enabled, print the INPUT arrays
-    if(!sampleArgs->quiet)
-    {
-        printArray<cl_float>(
-            "Input0",
-            input0,
-            width0,
-            1);
-        printArray<cl_float>(
-            "Input1",
-            input1,
-            width1,
-            1);
-    }
-
-    return SDK_SUCCESS;
+	return ((a % b) != 0) ? (a / b + 1) : (a / b);
 }
 
-/**
- * genBinary Image function is used to when we want to create the binary
- * for the kernel and run it at a later time. This is useful where offline
- * compilation is the preferred mechanism.
- */
-int
-MatrixMultiplication::genBinaryImage()
+static long
+GetCurrentTime()
 {
-    bifData binaryData;
-    binaryData.kernelName = std::string("MatrixMultiplication_Kernels.cl");
-    binaryData.flagsStr = std::string("");
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
+	struct timeval tv;
 
-    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
-    int status = generateBinaryImage(binaryData);
-    return status;
+	gettimeofday(&tv, NULL);
+
+	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
+    // return time(NULL);
+}
+
+static double 
+SubtractTime( long uiEndTime, long uiStartTime )
+{
+	return uiEndTime - uiStartTime;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int LoadTextFromFile(
+	const char *file_name, char **result_string, size_t *string_len)
+{
+	int fd;
+	unsigned file_len;
+	struct stat file_status;
+	int ret;
+
+	*string_len = 0;
+	fd = open(file_name, O_RDONLY);
+	if (fd == -1)
+	{
+		printf("Error opening file %s\n", file_name);
+		return -1;
+	}
+	ret = fstat(fd, &file_status);
+	if (ret)
+	{
+		printf("Error reading status for file %s\n", file_name);
+		return -1;
+	}
+	file_len = file_status.st_size;
+
+	*result_string = (char*)calloc(file_len + 1, sizeof(char));
+	ret = read(fd, *result_string, file_len);
+	if (!ret)
+	{
+		printf("Error reading from file %s\n", file_name);
+		return -1;
+	}
+
+	close(fd);
+
+	*string_len = file_len;
+	return 0;
+}
+
+static void DrawString(float x, float y, float color[4], char *buffer)
+{
+	unsigned int uiLen, i;
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+
+	glRasterPos2f(x, y);
+	glColor3f(color[0], color[1], color[2]);
+	uiLen = (unsigned int) strlen(buffer);
+	for (i = 0; i < uiLen; i++)
+	{
+		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, buffer[i]);
+	}
+	glPopAttrib();
+}
+
+static void DrawText(float x, float y, int light, const char *format, ...)
+{
+	va_list args;
+	char buffer[256];
+	GLint iVP[4];
+	GLint iMatrixMode;
+
+	va_start(args, format);
+	vsprintf(buffer, format, args);
+	va_end(args);
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+	glDisable(GL_BLEND);
+
+	glGetIntegerv(GL_VIEWPORT, iVP);
+	glViewport(0, 0, Width, Height);
+	glGetIntegerv(GL_MATRIX_MODE, &iMatrixMode);
+
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glScalef(2.0f / Width, -2.0f / Height, 1.0f);
+	glTranslatef(-Width / 2.0f, -Height / 2.0f, 0.0f);
+
+	if(light)
+	{
+		glColor4fv(ShadowTextColor);
+		DrawString(x-0, y-0, ShadowTextColor, buffer);
+
+		glColor4fv(HighlightTextColor);
+		DrawString(x-2, y-2, HighlightTextColor, buffer);
+	}
+	else
+	{
+		glColor4fv(HighlightTextColor);
+		DrawString(x-0, y-0, HighlightTextColor, buffer);
+
+		glColor4fv(ShadowTextColor);
+		DrawString(x-2, y-2, ShadowTextColor, buffer);   
+	}
+
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+
+	glPopMatrix();
+	glMatrixMode(iMatrixMode);
+
+	glPopAttrib();
+	glViewport(iVP[0], iVP[1], iVP[2], iVP[3]);
+}
+
+static void 
+CreateTexture(uint width, uint height)
+{    
+	if(TextureId)
+		glDeleteTextures(1, &TextureId);
+	TextureId = 0;
+
+	printf("Creating Texture %d x %d...\n", width, height);
+
+	TextureWidth = width;
+	TextureHeight = height;
+
+	glActiveTextureARB(ActiveTextureUnit);
+	glGenTextures(1, &TextureId);
+	glBindTexture(TextureTarget, TextureId);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP);
+	glTexParameteri(TextureTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(TextureTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexImage2D(TextureTarget, 0, TextureInternal, TextureWidth, TextureHeight, 0, 
+		TextureFormat, TextureType, 0);
+	glBindTexture(TextureTarget, 0);
+}
+
+static void 
+RenderTexture( void *pvData )
+{
+	glDisable( GL_LIGHTING );
+
+	glViewport( 0, 0, Width, Height );
+
+	glMatrixMode( GL_PROJECTION );
+	glLoadIdentity();
+	gluOrtho2D( -1.0, 1.0, -1.0, 1.0 );
+
+	glMatrixMode( GL_MODELVIEW );
+	glLoadIdentity();
+
+	glMatrixMode( GL_TEXTURE );
+	glLoadIdentity();
+
+	glEnable( TextureTarget );
+	glBindTexture( TextureTarget, TextureId );
+
+	if(pvData)
+		glTexSubImage2D(TextureTarget, 0, 0, 0, TextureWidth, TextureHeight, 
+			TextureFormat, TextureType, pvData);
+
+	glTexParameteri(TextureTarget, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
+	glBegin( GL_QUADS );
+	{
+		glColor3f(1.0f, 1.0f, 1.0f);
+		glTexCoord2f( 0.0f, 0.0f );
+		glVertex3f( -1.0f, -1.0f, 0.0f );
+
+		glTexCoord2f( 0.0f, 1.0f );
+		glVertex3f( -1.0f, 1.0f, 0.0f );
+
+		glTexCoord2f( 1.0f, 1.0f );
+		glVertex3f( 1.0f, 1.0f, 0.0f );
+
+		glTexCoord2f( 1.0f, 0.0f );
+		glVertex3f( 1.0f, -1.0f, 0.0f );
+	}
+	glEnd();
+	glBindTexture( TextureTarget, 0 );
+	glDisable( TextureTarget );
+}
+
+static void 
+Interpolate( float m[4], float t, float a[4], float b[4] )
+{
+	int i;
+	for ( i = 0; i < 4; i++ )
+		m[ i ] = ( 1.0f - t ) * a[ i ] + t * b[ i ];
+}
+
+static void 
+UpdateMu( float t[4], float a[4], float b[4] )
+{
+	*t += 0.01f;
+
+	uint seed = (uint)GetCurrentTime();
+
+	if ( *t >= 1.0f )
+	{
+		*t = 0.0f;
+
+		a[ 0 ] = b[ 0 ];
+		a[ 1 ] = b[ 1 ];
+		a[ 2 ] = b[ 2 ];
+		a[ 3 ] = b[ 3 ];
+
+		b[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+		b[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+		b[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+		b[ 3 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+	}
+}
+
+static void
+RandomFillArray_Float(float *arrayPtr, int width, int height, float rangeMin, float rangeMax)
+{
+	if (arrayPtr)
+	{
+		unsigned int seed = (unsigned int)time(NULL);
+
+		srand(seed);
+		double range = double(rangeMax - rangeMin) + 1.0;
+
+		for(int i = 0; i < height; i++)
+			for(int j = 0; j < width; j++)
+			{
+				int index = i*width + j;
+				arrayPtr[index] = rangeMin + float(range*rand()/(RAND_MAX + 1.0));
+			}
+		}
+	}
+
+static float *
+CreateRandomFilledArray_Float(int width, int height, float rangeMin, float rangeMax)
+{
+	float *array;
+
+	array = (float *)calloc(1, width * height * sizeof(float));
+
+	RandomFillArray_Float(array, width, height, rangeMin, rangeMax);
+
+	return array;
+}
+
+static void
+RandomColor( float v[4] )
+{
+	uint seed = (uint)GetCurrentTime();
+	v[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+	v[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+	v[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
+	v[ 3 ] = 1.0f;
+}
+
+static void 
+UpdateColor( float t[4], float a[4], float b[4] )
+{
+	*t += 0.01f;
+
+	if ( *t >= 1.0f )
+	{
+		*t = 0.0f;
+
+		a[ 0 ] = b[ 0 ];
+		a[ 1 ] = b[ 1 ];
+		a[ 2 ] = b[ 2 ];
+		a[ 3 ] = b[ 3 ];
+
+		RandomColor(b);
+	}
+}
+
+static int
+Recompute(void)
+{
+	if(!ComputeKernel || !ComputeMatrixC)
+		return CL_SUCCESS;
+
+	void *values[5];
+	size_t sizes[5];
+	size_t global[2];
+	size_t local[2];
+
+	int err = 0;
+	unsigned int v = 0, s = 0, a = 0;
+	values[v++] = &ComputeMatrixA;
+	values[v++] = &ComputeMatrixB;
+	values[v++] = &ComputeMatrixC;
+	values[v++] = &Width0;
+	if (Lds)
+		values[v++] = NULL;
+	else
+		values[v++] = &Width1;
+
+	sizes[s++] = sizeof(cl_mem);
+	sizes[s++] = sizeof(cl_mem);
+	sizes[s++] = sizeof(cl_mem);
+	sizes[s++] = sizeof(cl_int);
+	if (Lds)
+		sizes[s++] = (BlockSize * 4) * (BlockSize * 4) * sizeof(cl_float);
+	else
+		sizes[s++] = sizeof(cl_int);
+
+	if(Animated || Update)
+	{
+		clEnqueueWriteBuffer(ComputeCommands, ComputeMatrixA, CL_TRUE, 0, Width0 * Height0 * sizeof(float), Input0, 0, NULL, NULL);
+		clEnqueueWriteBuffer(ComputeCommands, ComputeMatrixB, CL_TRUE, 0, Width1 * Height1 * sizeof(float), Input1, 0, NULL, NULL);
+		clFlush(ComputeCommands);
+
+		Update = 0;
+		err = CL_SUCCESS;
+		for (a = 0; a < s; a++)
+			err |= clSetKernelArg(ComputeKernel, a, sizes[a], values[a]);
+
+		if (err)
+			return -10;
+	}
+
+	global[0] = Width1 / 4;
+	global[1] = Height0/ 4;
+	local[0] = BlockSize;
+	local[1] = BlockSize;
+
+#if (DEBUG_INFO)
+	if(FrameCount <= 1)
+		printf("Global[%4d %4d] Local[%4d %4d]\n", 
+			(int)global[0], (int)global[1],
+			(int)local[0], (int)local[1]);
+#endif
+
+	err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 2, NULL, global, local, 0, NULL, NULL);
+	if (err)
+	{
+		printf("Failed to enqueue kernel! %d\n", err);
+		return err;
+	}
+
+#if (USE_GL_ATTACHMENTS)
+
+	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to acquire GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
+
+	size_t origin[] = { 0, 0, 0 };
+	size_t region[] = { TextureWidth, TextureHeight, 1 };
+	err = clEnqueueCopyBufferToImage(ComputeCommands, ComputeMatrixC, ComputeImage, 
+		0, origin, region, 0, NULL, 0);
+
+	if(err != CL_SUCCESS)
+	{
+		printf("Failed to copy buffer to image! %d\n", err);
+		return EXIT_FAILURE;
+	}
+
+	err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to release GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
+
+#else
+
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeMatrixC, CL_TRUE, 0, Width * Height * TextureTypeSize * 4, HostImageBuffer, 0, NULL, NULL );      
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to read buffer! %d\n", err);
+		return EXIT_FAILURE;
+	}
+
+#endif
+
+	return CL_SUCCESS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+CreateComputeResource(void)
+{
+	int err = 0;
+
+#if (USE_GL_ATTACHMENTS)
+
+	if(ComputeImage)
+		clReleaseMemObject(ComputeImage);
+	ComputeImage = 0;
+
+	printf("Allocating compute result image in device memory...\n");
+	ComputeImage = clCreateFromGLTexture(ComputeContext, CL_MEM_WRITE_ONLY, TextureTarget, 0, TextureId, &err);
+	if (!ComputeImage || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL texture reference! %d\n", err);
+		return -1;
+	}
+
+#else
+
+	if (HostImageBuffer)
+		free(HostImageBuffer);
+
+	printf("Allocating compute result image in host memory...\n");
+	HostImageBuffer = malloc(TextureWidth * TextureHeight * TextureTypeSize * 4);
+	if(!HostImageBuffer)
+	{
+		printf("Failed to create host image buffer!\n");
+		return -1;
+	}
+
+	memset(HostImageBuffer, 0, TextureWidth * TextureHeight * TextureTypeSize * 4);
+
+#endif
+
+	if(ComputeMatrixA)
+		clReleaseMemObject(ComputeMatrixA);
+	ComputeMatrixA = 0;
+
+	ComputeMatrixA = clCreateBuffer(ComputeContext, CL_MEM_READ_ONLY, sizeof(cl_float) * Width0 * Height0, NULL, NULL);
+	if (!ComputeMatrixA)
+	{
+		printf("Failed to create OpenCL array!\n");
+		return -1;
+	}
+
+	if(ComputeMatrixB)
+		clReleaseMemObject(ComputeMatrixB);
+	ComputeMatrixB = 0;
+
+	ComputeMatrixB = clCreateBuffer(ComputeContext, CL_MEM_READ_ONLY, sizeof(cl_float) * Width1 * Height1, NULL, NULL);
+	if (!ComputeMatrixB)
+	{
+		printf("Failed to create OpenCL array!\n");
+		return -1;
+	}
+
+
+	if(ComputeMatrixC)
+		clReleaseMemObject(ComputeMatrixC);
+	ComputeMatrixC = 0;
+
+	ComputeMatrixC = clCreateBuffer(ComputeContext, CL_MEM_WRITE_ONLY, TextureTypeSize * 4 * TextureWidth * TextureHeight, NULL, NULL);
+	if (!ComputeMatrixC)
+	{
+		printf("Failed to create OpenCL array!\n");
+		return -1;
+	}
+
+	return CL_SUCCESS;
+}
+
+static int 
+SetupComputeDevices(int gpu)
+{
+	int err;
+	size_t returned_size;
+	ComputeDeviceType = gpu ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
+
+#if (USE_GL_ATTACHMENTS)
+
+	printf(SEPARATOR);
+	printf("Using active OpenGL context...\n");
+
+// Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+// Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+// Create a context  
+	cl_context_properties properties[] =
+	{
+		CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
+		CL_GLX_DISPLAY_KHR, (cl_context_properties)glXGetCurrentDisplay(),
+		CL_CONTEXT_PLATFORM, (cl_context_properties)(platform_id),
+		0
+	};
+
+// Create a context from a CGL share group
+//
+	ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
+#else
+
+// Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+// Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+// Create a context containing the compute device(s)
+//
+	ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
+#endif
+
+	unsigned int device_count;
+	cl_device_id device_ids[16];
+
+	err = clGetContextInfo(ComputeContext, CL_CONTEXT_DEVICES, sizeof(device_ids), device_ids, &returned_size);
+	if(err)
+	{
+		printf("Error: Failed to retrieve compute devices for context!\n");
+		return EXIT_FAILURE;
+	}
+
+	device_count = returned_size / sizeof(cl_device_id);
+
+	int i = 0;
+	int device_found = 0;
+	cl_device_type device_type; 
+	for(i = 0; i < device_count; i++) 
+	{
+		clGetDeviceInfo(device_ids[i], CL_DEVICE_TYPE, sizeof(cl_device_type), &device_type, NULL);
+		if(device_type == ComputeDeviceType) 
+		{
+			ComputeDeviceId = device_ids[i];
+			device_found = 1;
+			break;
+		} 
+	}
+
+	if(!device_found)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+// Create a command queue
+//
+	ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
+	if (!ComputeCommands)
+	{
+		printf("Error: Failed to create a command queue!\n");
+		return EXIT_FAILURE;
+	}
+
+// Report the device vendor and device name
+// 
+	cl_char vendor_name[1024] = {0};
+	cl_char device_name[1024] = {0};
+	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
+	err|= clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_NAME, sizeof(device_name), device_name, &returned_size);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve device info!\n");
+		return EXIT_FAILURE;
+	}
+
+	printf(SEPARATOR);
+	printf("Connecting to %s %s...\n", vendor_name, device_name);
+
+	return CL_SUCCESS;
+}
+
+static int 
+SetupComputeKernel(void)
+{
+	int err = 0;
+	char *source = 0;
+	size_t length = 0;
+
+	if(ComputeKernel)
+		clReleaseKernel(ComputeKernel);    
+	ComputeKernel = 0;
+
+	if(ComputeProgram)
+		clReleaseProgram(ComputeProgram);
+	ComputeProgram = 0;
+
+	printf(SEPARATOR);
+	printf("Loading kernel source from file '%s'...\n", COMPUTE_KERNEL_FILENAME);    
+	err = LoadTextFromFile(COMPUTE_KERNEL_FILENAME, &source, &length);
+	if (!source || err)
+	{
+		printf("Error: Failed to load kernel source!\n");
+		return EXIT_FAILURE;
+	}
+
+#if (DEBUG_INFO)
+	printf("%s", source);
+#endif
+
+// Create the compute program from the source buffer
+//
+	ComputeProgram = clCreateProgramWithSource(ComputeContext, 1, (const char **) & source, NULL, &err);
+	if (!ComputeProgram || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute program!\n");
+		return EXIT_FAILURE;
+	}
+	free(source);
+
+// Build the program executable
+//
+	err = clBuildProgram(ComputeProgram, 0, NULL, NULL, NULL, NULL);
+	if (err != CL_SUCCESS)
+	{
+		size_t len;
+		char buffer[2048];
+
+		printf("Error: Failed to build program executable!\n");
+		clGetProgramBuildInfo(ComputeProgram, ComputeDeviceId, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
+		printf("%s\n", buffer);
+		return EXIT_FAILURE;
+	}
+
+// Create the compute kernel from within the program
+//
+	if (Lds)
+	{
+		printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_MATMUL_LDS_NAME); 
+		ComputeKernel = clCreateKernel(ComputeProgram, COMPUTE_KERNEL_MATMUL_LDS_NAME, &err);
+	}
+	else
+	{
+		printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_MATMUL_NAME); 
+		ComputeKernel = clCreateKernel(ComputeProgram, COMPUTE_KERNEL_MATMUL_NAME, &err);
+	}
+
+	if (!ComputeKernel || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute kernel!\n");
+		return EXIT_FAILURE;
+	}
+
+// Get the maximum work group size for executing the kernel on the device
+//
+	err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxWorkGroupSize, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve kernel work group info! %d\n", err);
+		exit(1);
+	}
+
+#if (DEBUG_INFO)
+	printf("MaxWorkGroupSize: %d\n", MaxWorkGroupSize);
+	printf("WorkGroupItems: %d\n", WorkGroupItems);
+#endif
+
+	WorkGroupSize[0] = (MaxWorkGroupSize > 1) ? (MaxWorkGroupSize / WorkGroupItems) : MaxWorkGroupSize;
+	WorkGroupSize[1] = MaxWorkGroupSize / WorkGroupSize[0];
+
+	printf(SEPARATOR);
+
+	return CL_SUCCESS;
+
+}
+
+static void
+Cleanup(void)
+{
+	clFinish(ComputeCommands);
+	clReleaseKernel(ComputeKernel);
+	clReleaseProgram(ComputeProgram);
+	clReleaseCommandQueue(ComputeCommands);
+	clReleaseMemObject(ComputeMatrixA);
+	clReleaseMemObject(ComputeMatrixB);
+	clReleaseMemObject(ComputeMatrixC);
+	clReleaseMemObject(ComputeImage);
+	clReleaseContext(ComputeContext);
+
+	ComputeCommands = 0;
+	ComputeKernel = 0;
+	ComputeProgram = 0;    
+	ComputeMatrixA = 0;
+	ComputeMatrixB = 0;
+	ComputeMatrixC = 0;
+	ComputeImage = 0;
+	ComputeContext = 0;
+}
+
+static void
+Shutdown(void)
+{
+	printf(SEPARATOR);
+	printf("Shutting down...\n");
+	Cleanup();
+	exit(0);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+SetupGraphics(void)
+{
+	CreateTexture(Width, Height);
+
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+
+	glDisable(GL_DEPTH_TEST);
+	glActiveTexture(GL_TEXTURE0);
+	glViewport(0, 0, Width, Height);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+
+	TexCoords[3][0] = 0.0f;
+	TexCoords[3][1] = 0.0f;
+	TexCoords[2][0] = Width;
+	TexCoords[2][1] = 0.0f;
+	TexCoords[1][0] = Width;
+	TexCoords[1][1] = Height;
+	TexCoords[0][0] = 0.0f;
+	TexCoords[0][1] = Height;
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, VertexPos);
+	glClientActiveTexture(GL_TEXTURE0);
+	glTexCoordPointer(2, GL_FLOAT, 0, TexCoords);
+	return GL_NO_ERROR;
+}
+
+static int 
+Initialize(int gpu)
+{
+	int err;
+	err = SetupGraphics();
+	if (err != GL_NO_ERROR)
+	{
+		printf ("Failed to setup OpenGL state!");
+		exit (err);
+	}
+
+	err = SetupComputeDevices(gpu);
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to connect to compute device! Error %d\n", err);
+		exit (err);
+	}
+
+	cl_bool image_support;
+	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_IMAGE_SUPPORT,
+		sizeof(image_support), &image_support, NULL);
+	if (err != CL_SUCCESS) {
+		printf("Unable to query device for image support");
+		exit(err);
+	}
+	if (image_support == CL_FALSE) {
+		printf("MatMul requires images: Images not supported on this device.");
+		return CL_IMAGE_FORMAT_NOT_SUPPORTED;
+	}
+
+	err = SetupComputeKernel();
+	if (err != CL_SUCCESS)
+	{
+		printf ("Failed to setup compute kernel! Error %d\n", err);
+		exit (err);
+	}
+
+	err = CreateComputeResource();
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to create compute result! Error %d\n", err);
+		exit (err);
+	}
+
+	Input0 = CreateRandomFilledArray_Float(Width0, Height0, 0.0, 1.0);
+	Input1 = CreateRandomFilledArray_Float(Width1, Height1, 0.0, 1.0);
+	Output = CreateRandomFilledArray_Float(Width1, Height0, 0.0, 1.0);
+
+	return CL_SUCCESS;
 }
 
 
-
-int
-MatrixMultiplication::setupCL(void)
+static void
+ReportInfo(void)
 {
-    cl_int status = 0;
-    cl_device_type dType;
+	if(ShowStats)
+	{
+		int iX = 20;
+		int iY = 20;
 
-    if(sampleArgs->deviceType.compare("cpu") == 0)
-    {
-        dType = CL_DEVICE_TYPE_CPU;
-    }
-    else //deviceType = "gpu"
-    {
-        dType = CL_DEVICE_TYPE_GPU;
-        if(sampleArgs->isThereGPU() == false)
-        {
-            std::cout << "GPU not found. Falling back to CPU device" << std::endl;
-            dType = CL_DEVICE_TYPE_CPU;
-        }
-    }
+		DrawText(iX - 1, Height - iY - 1, 0, StatsString);
+		DrawText(iX - 2, Height - iY - 2, 0, StatsString);
+		DrawText(iX, Height - iY, 1, StatsString);
+	}
 
-    /*
-     * Have a look at the available platforms and pick either
-     * the AMD one if available or a reasonable default.
-     */
-    cl_platform_id platform = NULL;
-    int retValue = getPlatform(platform, sampleArgs->platformId,
-                               sampleArgs->isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
+	if(ShowInfo)
+	{
+		int iX = TextOffset[0];
+		int iY = Height - TextOffset[1];
 
-    // Display available devices.
-    retValue = displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
+		DrawText(Width - iX - 1 - strlen(InfoString) * 10, Height - iY - 1, 0, InfoString);
+		DrawText(Width - iX - 2 - strlen(InfoString) * 10, Height - iY - 2, 0, InfoString);
+		DrawText(Width - iX - strlen(InfoString) * 10, Height - iY, 1, InfoString);
 
-    // creating context
-    cl_context_properties cps[3] =
-    {
-        CL_CONTEXT_PLATFORM,
-        (cl_context_properties)platform,
-        0
-    };
-
-    context = clCreateContextFromType(
-                  cps,
-                  dType,
-                  NULL,
-                  NULL,
-                  &status);
-    CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed.");
-
-    // getting device on which to run the sample
-    status = getDevices(context, &devices, sampleArgs->deviceId,
-                        sampleArgs->isDeviceIdEnabled());
-    CHECK_ERROR(status, SDK_SUCCESS, "getDevices() failed");
-
-    //Set device info of given cl_device_id
-    retValue = deviceInfo.setDeviceInfo(devices[sampleArgs->deviceId]);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "SDKDeviceInfo::setDeviceInfo() failed");
-
-    {
-        // The block is to move the declaration of prop closer to its use
-        cl_command_queue_properties prop = 0;
-        if(!eAppGFLOPS)
-        {
-            prop |= CL_QUEUE_PROFILING_ENABLE;
-        }
-
-        commandQueue = clCreateCommandQueue(
-                           context,
-                           devices[sampleArgs->deviceId],
-                           prop,
-                           &status);
-        CHECK_OPENCL_ERROR(status, "clCreateCommandQueue failed.");
-    }
-
-    // Set Presistent memory only for AMD platform
-    cl_mem_flags inMemFlags = CL_MEM_READ_ONLY;
-    if(sampleArgs->isAmdPlatform())
-    {
-        inMemFlags |= CL_MEM_USE_PERSISTENT_MEM_AMD;
-    }
-
-    // Create buffer for matrix A
-    inputBuffer0 = clCreateBuffer(
-                       context,
-                       inMemFlags,
-                       sizeof(cl_float) * width0 * height0,
-                       0,
-                       &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputBuffer0)");
-
-    // Create buffer for matrix B
-    inputBuffer1 = clCreateBuffer(
-                       context,
-                       inMemFlags,
-                       sizeof(cl_float) * width1 * height1,
-                       0,
-                       &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputBuffer1)");
-
-    outputBuffer = clCreateBuffer(
-                       context,
-                       CL_MEM_WRITE_ONLY | CL_MEM_ALLOC_HOST_PTR,
-                       sizeof(cl_float) * height0 * width1,
-                       0,
-                       &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (outputBuffer)");
-
-    // create a CL program using the kernel source
-    buildProgramData buildData;
-    buildData.kernelName = std::string("MatrixMultiplication_Kernels.cl");
-    buildData.devices = devices;
-    buildData.deviceId = sampleArgs->deviceId;
-    buildData.flagsStr = std::string("");
-    if(sampleArgs->isLoadBinaryEnabled())
-    {
-        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
-    }
-
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
-
-    retValue = buildOpenCLProgram(program, context, buildData);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
-
-    // If local memory is present then use the specific kernel
-    if(lds)
-    {
-        kernel = clCreateKernel(program, "mmmKernel_local", &status);
-    }
-    else
-    {
-        kernel = clCreateKernel(program, "mmmKernel", &status);
-    }
-    CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
-    return SDK_SUCCESS;
+		ShowInfo = (ShowInfo > 200) ? 0 : ShowInfo + 1;
+	}
 }
 
-int
-MatrixMultiplication::setWorkGroupSize()
+static void 
+ReportStats(
+	uint64_t uiStartTime, uint64_t uiEndTime)
 {
-    /*
-     * Kernel runs over complete output matrix with blocks of blockSize x blockSize
-     * running concurrently
-     */
-    cl_int status = 0;
-    globalThreads[0] = width1 / 4;
-    globalThreads[1] = height0/ 4;
-    localThreads[0] = blockSize;
-    localThreads[1] = blockSize;
+	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
 
-    // Setting the KernelWorkGroupInfo values
-    status = kernelInfo.setKernelWorkGroupInfo(kernel,
-             devices[sampleArgs->deviceId]);
-    CHECK_ERROR(status,0, "setKernelWrkGroupInfo failed");
+	if(TimeElapsed && FrameCount && FrameCount > ReportStatsInterval) 
+	{
+		double fMs = (TimeElapsed / (double) FrameCount);
+		double fFps = 1.0 / (fMs / 1000.0);
 
-    availableLocalMemory = deviceInfo.localMemSize - kernelInfo.localMemoryUsed;
-    neededLocalMemory    = 2 * blockSize * blockSize * sizeof(cl_float);
-    if(neededLocalMemory > availableLocalMemory)
-    {
-        std::cout << "Unsupported: Insufficient local memory on device." << std::endl;
-        return SDK_SUCCESS;
-    }
+		sprintf(StatsString, "[%s] Compute: %3.2f ms  Display: %3.2f fps (%s)\n", 
+			(ComputeDeviceType == CL_DEVICE_TYPE_GPU) ? "GPU" : "CPU", 
+			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
-    if((cl_uint)(localThreads[0] * localThreads[1]) >
-            kernelInfo.kernelWorkGroupSize)
-    {
-        if(kernelInfo.kernelWorkGroupSize >= 64)
-        {
-            blockSize = 8;
-            localThreads[0] = blockSize;
-            localThreads[1] = blockSize;
-        }
-        else if(kernelInfo.kernelWorkGroupSize >= 32)
-        {
-            blockSize = 4;
-            localThreads[0] = blockSize;
-            localThreads[1] = blockSize;
-        }
-        else
-        {
-            std::cout << "Out of Resources!" << std::endl;
-            std::cout << "Group Size specified : " << localThreads[0] * localThreads[1] <<
-                      std::endl;
-            std::cout << "Max Group Size supported on the kernel : "
-                      << kernelInfo.kernelWorkGroupSize<<std::endl;
-            return SDK_FAILURE;
-        }
-    }
+		glutSetWindowTitle(StatsString);
 
-    if(localThreads[0] > deviceInfo.maxWorkItemSizes[0] ||
-            localThreads[1] > deviceInfo.maxWorkItemSizes[1] ||
-            localThreads[0] * localThreads[1] > deviceInfo.maxWorkGroupSize)
-    {
-        std::cout <<
-                  "Unsupported: Device does not support requested number of work items." <<
-                  std::endl;
-        return SDK_FAILURE;
-    }
-    return SDK_SUCCESS;
+		FrameCount = 0;
+		TimeElapsed = 0;
+	}    
 }
 
-
-int
-MatrixMultiplication::runCLKernels(void)
+static void
+Display_(void)
 {
-    cl_int   status;
-    status = setWorkGroupSize();
-    CHECK_ERROR(status, SDK_SUCCESS, "getWorkGroupSize() failed");
+	FrameCount++;
+	uint64_t uiStartTime = GetCurrentTime();
 
-    cl_event ndrEvt;
-    cl_int eventStatus = CL_QUEUED;
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+	glClear (GL_COLOR_BUFFER_BIT);
 
+	if(Animated)
+	{
+		RandomFillArray_Float(Input0, Width0, Height0, 0.0, 1.0);
+		RandomFillArray_Float(Input1, Width1, Height1, 0.0, 1.0);
+	}
 
-    // Set input data to matrix A and matrix B
-    cl_event inMapEvt1, inMapEvt2, inUnmapEvt1, inUnmapEvt2, outMapEvt, outUnmapEvt;
-    void* mapPtr1 = clEnqueueMapBuffer(
-                        commandQueue,
-                        inputBuffer0,
-                        CL_FALSE,
-                        CL_MAP_WRITE,
-                        0,
-                        width0 * height0 * sizeof(cl_float),
-                        0,
-                        NULL,
-                        &inMapEvt1,
-                        &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (inputBuffer0)");
+	int err = Recompute();
+	if (err != 0)
+	{
+		printf("Error %d from Recompute!\n", err);
+		exit(1);
+	}
 
-    void* mapPtr2 = clEnqueueMapBuffer(
-                        commandQueue,
-                        inputBuffer1,
-                        CL_FALSE,
-                        CL_MAP_WRITE,
-                        0,
-                        width1 * height1 * sizeof(cl_float),
-                        0,
-                        NULL,
-                        &inMapEvt2,
-                        &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (inputBuffer1)");
+	RenderTexture(HostImageBuffer);
+	ReportInfo();
 
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
+	glFinish(); // for timing
 
-    // random initialisation of input
-    fillRandom<cl_float>(input0, width0, height0, 0, 1);
-    fillRandom<cl_float>(input1, width1, height1, 0, 1);
-
-    status = waitForEventAndRelease(&inMapEvt1);
-    CHECK_ERROR(status,SDK_SUCCESS, "WaitForEventAndRelease(inMapEvt1) Failed");
-    memcpy(mapPtr1, input0, sizeof(cl_float) * width0  * height0);
-
-    status = waitForEventAndRelease(&inMapEvt2);
-    CHECK_ERROR(status,SDK_SUCCESS, "WaitForEventAndRelease(inMapEvt2) Failed");
-    memcpy(mapPtr2, input1, sizeof(cl_float) * width1  * height1);
-
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 inputBuffer0,
-                 mapPtr1,
-                 0,
-                 NULL,
-                 &inUnmapEvt1);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (inputBuffer0)");
-
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 inputBuffer1,
-                 mapPtr2,
-                 0,
-                 NULL,
-                 &inUnmapEvt2);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (inputBuffer1)");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&inUnmapEvt1);
-    CHECK_ERROR(status, SDK_SUCCESS, "waitForEventAndRelease(inUnmapEvt1) failed");
-
-    status = waitForEventAndRelease(&inUnmapEvt2);
-    CHECK_ERROR(status,SDK_SUCCESS, "waitForEventAndRelease(inUnmapEvt2) failed");
-
-    // Set appropriate arguments to the kernel
-
-    // output array as the 1st argument : stores product of input0 and input1
-    status = clSetKernelArg(
-                 kernel,
-                 0,
-                 sizeof(cl_mem),
-                 (void *)&inputBuffer0);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputBuffer0)");
-
-    // the input matrix  as 2nd argument - input0
-    status = clSetKernelArg(
-                 kernel,
-                 1,
-                 sizeof(cl_mem),
-                 (void *)&inputBuffer1);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputBuffer1)");
-
-    // the input matrix as 3rd argument - input1
-    status = clSetKernelArg(
-                 kernel,
-                 2,
-                 sizeof(cl_mem),
-                 (void *)&outputBuffer);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (outputBuffer)");
-
-    // width0 of the input0 matrix as 4th argument - width0
-    status = clSetKernelArg(
-                 kernel,
-                 3,
-                 sizeof(cl_int),
-                 (void*)&width0);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (width0)");
-
-    // Set local memory argument if Scratchpad is available
-    if(lds)
-    {
-        status = clSetKernelArg(
-                     kernel,
-                     4,
-                     (blockSize * 4) * (blockSize * 4) * sizeof(cl_float),
-                     NULL);
-        CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (local memory)");
-    }
-    else
-    {
-        status = clSetKernelArg(kernel, 4, sizeof(cl_int), &width1);
-        CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (width1)");
-    }
-
-    // Enqueue a kernel run call
-    status = clEnqueueNDRangeKernel(
-                 commandQueue,
-                 kernel,
-                 2,
-                 NULL,
-                 globalThreads,
-                 localThreads,
-                 0,
-                 NULL,
-                 &ndrEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueNDRangeKernel failed.");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    // wait for the kernel call to finish execution
-    eventStatus = CL_QUEUED;
-    while(eventStatus != CL_COMPLETE)
-    {
-        status = clGetEventInfo(
-                     ndrEvt,
-                     CL_EVENT_COMMAND_EXECUTION_STATUS,
-                     sizeof(cl_int),
-                     &eventStatus,
-                     NULL);
-        CHECK_OPENCL_ERROR(status, "clGetEventInfo failed.");
-    }
-
-    if(!eAppGFLOPS)
-    {
-        // Calculate performance
-        cl_ulong startTime;
-        cl_ulong endTime;
-
-        // Get kernel profiling info
-        status = clGetEventProfilingInfo(ndrEvt,
-                                         CL_PROFILING_COMMAND_START,
-                                         sizeof(cl_ulong),
-                                         &startTime,
-                                         0);
-        CHECK_OPENCL_ERROR(status, "clGetEventProfilingInfo failed.(startTime)");
-
-        status = clGetEventProfilingInfo(ndrEvt,
-                                         CL_PROFILING_COMMAND_END,
-                                         sizeof(cl_ulong),
-                                         &endTime,
-                                         0);
-        CHECK_OPENCL_ERROR(status, "clGetEventProfilingInfo failed.(endTime)");
-
-        // Print performance numbers
-        double sec = 1e-9 * (endTime - startTime);
-        kernelTime += sec;
-    }
-
-    status = clReleaseEvent(ndrEvt);
-    CHECK_OPENCL_ERROR(status, "clReleaseEvent failed. (ndrEvt)");
-
-    void* outMapPtr = clEnqueueMapBuffer(
-                          commandQueue,
-                          outputBuffer,
-                          CL_FALSE,
-                          CL_MAP_READ,
-                          0,
-                          width1 * height0 * sizeof(cl_float),
-                          0,
-                          NULL,
-                          &outMapEvt,
-                          &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. (outputBuffer)");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&outMapEvt);
-    CHECK_ERROR(status,0, "waitForEventAndRelease(outMapEvt) failed");
-    memcpy(output, outMapPtr, sizeof(cl_float) * width1  * height0);
-
-    status = clEnqueueUnmapMemObject(
-                 commandQueue,
-                 outputBuffer,
-                 outMapPtr,
-                 0,
-                 NULL,
-                 &outUnmapEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. (outputBuffer)");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&outUnmapEvt);
-    CHECK_ERROR(status,0, "waitForEventAndRelease(outUnmapEvt) failed");
-
-    return SDK_SUCCESS;
+	uint64_t uiEndTime = GetCurrentTime();
+	ReportStats(uiStartTime, uiEndTime);
+	DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+	glutSwapBuffers();
 }
 
-/*
- * This is a naive O(N^3) CPU implementation of matrix multiplication
- */
-void
-MatrixMultiplication::matrixMultiplicationCPUReference(
-    cl_float * output,
-    cl_float * input0,
-    cl_float * input1,
-    const cl_uint y,
-    const cl_uint x,
-    const cl_uint z)
+static void 
+Reshape (int w, int h)
 {
-    for(cl_uint i = 0; i < y; i++)
-    {
-        for(cl_uint j = 0; j < z; j++)
-        {
-            for(cl_uint k = 0; k < x; k++)
-            {
-                output[i * z + j] += (input0[i * x + k] * input1[k * z + j]);
-            }
-        }
-    }
+	glViewport(0, 0, w, h);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glClear(GL_COLOR_BUFFER_BIT);
+	glutSwapBuffers();
+
+	if(w > 2 * Width || h > 2 * Height)
+	{
+		Width = w;
+		Height = h;
+		Cleanup();
+		if(Initialize(ComputeDeviceType == CL_DEVICE_TYPE_GPU) != GL_NO_ERROR)
+			Shutdown();
+	}
+
+	Width = w;
+	Height = h;    
 }
 
-int
-MatrixMultiplication::initialize()
+void Keyboard( unsigned char key, int x, int y )
 {
-    // Call base class Initialize to get default configuration
-    if(sampleArgs->initialize() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
+	const float fStepSize = 0.05f;
 
-    // add an option for getting blockSize from commandline
-    Option* xParam = new Option;
-    CHECK_ALLOCATION(xParam, "Memory Allocation error.\n");
-    xParam->_sVersion = "x";
-    xParam->_lVersion = "height0";
-    xParam->_description = "height of matrix A";
-    xParam->_type     = CA_ARG_INT;
-    xParam->_value    = &n;
-    sampleArgs->AddOption(xParam);
-    delete xParam;
+	switch( key )
+	{
+		case 27:
+		exit(0);
+		break;
 
-    Option* yParam = new Option;
-    CHECK_ALLOCATION(yParam, "Memory Allocation error.\n");
-    yParam->_sVersion = "y";
-    yParam->_lVersion = "width0";
-    yParam->_description = "width of matrix A and Height of matrix B";
-    yParam->_type     = CA_ARG_INT;
-    yParam->_value    = &m;
-    sampleArgs->AddOption(yParam);
-    delete yParam;
+		case ' ':
+		Animated = !Animated;
+		sprintf(InfoString, "Animated = %s\n", Animated ? "true" : "false");
+		ShowInfo = 1;
+		break;
 
-    Option* zParam = new Option;
-    CHECK_ALLOCATION(zParam, "Memory Allocation error.\n");
-    zParam->_sVersion = "z";
-    zParam->_lVersion = "width1";
-    zParam->_description = "width of matrix B";
-    zParam->_type     = CA_ARG_INT;
-    zParam->_value    = &k;
-    sampleArgs->AddOption(zParam);
-    delete zParam;
+		case 'i':
+		ShowInfo = ShowInfo > 0 ? 0 : 1;
+		break;
 
-    Option* blockSizeParam = new Option;
-    CHECK_ALLOCATION(blockSizeParam, "Memory Allocation error.\n");
-    blockSizeParam->_sVersion = "b";
-    blockSizeParam->_lVersion = "blockSize";
-    blockSizeParam->_description =
-        "Use local memory of dimensions blockSize x blockSize";
-    blockSizeParam->_type     = CA_ARG_INT;
-    blockSizeParam->_value    = &blockSize;
-    sampleArgs->AddOption(blockSizeParam);
-    delete blockSizeParam;
-
-    Option* num_iterations = new Option;
-    CHECK_ALLOCATION(num_iterations, "Memory Allocation error.\n");
-    num_iterations->_sVersion = "i";
-    num_iterations->_lVersion = "iterations";
-    num_iterations->_description = "Number of iterations for kernel execution";
-    num_iterations->_type = CA_ARG_INT;
-    num_iterations->_value = &iterations;
-    sampleArgs->AddOption(num_iterations);
-    delete num_iterations;
-
-    Option* appGflops_option = new Option;
-    CHECK_ALLOCATION(appGflops_option, "Memory Allocation error.\n");
-    appGflops_option->_sVersion = "";
-    appGflops_option->_lVersion = "eAppGflops";
-    appGflops_option->_description =
-        "Prints GFLOPS calculated from transfer + kernel time";
-    appGflops_option->_type = CA_NO_ARGUMENT;
-    appGflops_option->_value = &eAppGFLOPS;
-    sampleArgs->AddOption(appGflops_option);
-    delete appGflops_option;
-
-    Option* displayGL = new Option;
-    CHECK_ALLOCATION(displayGL, "Memory Allocation error.\n");
-    displayGL->_sVersion = "ds";
-    displayGL->_lVersion = "displayGL";
-    displayGL->_description =
-        "Display GL";
-    displayGL->_type = CA_NO_ARGUMENT;
-    displayGL->_value = &display;
-    sampleArgs->AddOption(displayGL);
-    delete displayGL;
-    return SDK_SUCCESS;
+		case 's':
+		ShowStats = ShowStats > 0 ? 0 : 1;
+		break;
+	}
+	Update = 1;
+	glutPostRedisplay();
 }
 
-int
-MatrixMultiplication::setup()
+void Idle(void)
 {
-    // Validation of input values
-    if((n == 0) || (m == 0) || (k == 0))
-    {
-        std::cout << "Error: Matrix dimensions can not be 0" << std::endl;
-        return SDK_FAILURE;
-    }
-
-    // Make sure the dimensions are multiples of blockSize
-    const int vectorSize = 4;
-    if(n % (blockSize * vectorSize) != 0)
-    {
-        n = (n / (blockSize * vectorSize) + 1) * (blockSize * vectorSize);
-    }
-
-    if(m % (blockSize * vectorSize) != 0)
-    {
-        m = (m / (blockSize * vectorSize) + 1) * (blockSize * vectorSize);
-    }
-
-    if(k % (blockSize * vectorSize) != 0)
-    {
-        k = (k / (blockSize * vectorSize) + 1) * (blockSize * vectorSize);
-    }
-
-    width0  = m;
-    height0 = n;
-
-    width1  = k;
-    height1 = m;
-
-    if(setupMatrixMultiplication()!=SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
-    if(setupCL()!=SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    sampleTimer->stopTimer(timer);
-
-    setupTime = (cl_double)sampleTimer->readTimer(timer);
-
-    return SDK_SUCCESS;
+	glutPostRedisplay();
 }
 
-/**
-* @brief Initialize GL
-*/
-void
-GLInit()
+int main(int argc, char** argv)
 {
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
+    // Parse command line options
+    //
+	int i;
+	int use_gpu = 1;
+	for( i = 0; i < argc && argv; i++)
+	{
+		if(!argv[i])
+			continue;
+
+		if(strstr(argv[i], "cpu"))
+			use_gpu = 0;        
+
+		else if(strstr(argv[i], "gpu"))
+			use_gpu = 1;
+
+		else if (strstr(argv[i], "lds"))
+			Lds = 1;
+	}
+
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+	glutInitWindowSize (Width, Height);
+	glutInitWindowPosition (100, 100);
+	glutCreateWindow (argv[0]);
+	if (Initialize (use_gpu) == GL_NO_ERROR)
+	{
+		glutDisplayFunc(Display_);
+		glutIdleFunc(Idle);
+		glutReshapeFunc(Reshape);
+		glutKeyboardFunc(Keyboard);
+
+		atexit(Shutdown);
+		printf("Starting event loop...\n");
+
+		glutMainLoop();
+	}
+
+	return 0;
 }
 
-/**
-* @brief Glut Idle function
-*/
-void
-idle()
-{
-    glutPostRedisplay();
-}
-
-/**
-* @brief Glut reshape func
-*
-* @param w width of OpenGL window
-* @param h height of OpenGL window
-*/
-void
-reShape(int w,int h)
-{
-    glViewport(0, 0, w, h);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    gluPerspective(45.0f, w/h, 1.0f, 100.0f);
-    gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
-}
-
-/**
-* @brief OpenGL display function
-*/
-void 
-displayfunc()
-{
-    static int numFrames = 0;
-
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-
-    glPointSize(1.0);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glEnable(GL_BLEND);
-    glDepthMask(GL_FALSE);
-
-    MatrixMultiplication *matmul = (MatrixMultiplication *)me;
-
-    int numPixels = me->getWidth0() * me->getHeight1( 	);
-    matmul->runCLKernels();
-
-    if(!me->sampleArgs->quiet)
-    {
-        printArray<cl_float>("Output", me->getOutput(), me->getWidth1(), 1);
-    }
-
-    float* r = me->getInput0();
-    float* g = me->getInput1();    
-    float* b = me->getOutput();
-
-    int scaling = 1000;
-
-    glBegin(GL_POINTS);
-    for(int i = 0; i < numPixels; ++i)
-    {
-		// Set color
-        // glColor3f(1.0, 0.0, 0.0);
-
-	    glColor3f(r[i], g[i], b[i]);
-        //divided by 300 just for scaling
-        glVertex4f((i % me->getWidth0()), (i / me->getWidth0()), 0.0, scaling);
-        // glVertex4f(output[i] -1.0, output[i] - 1.0, 0.0, 2 * scaling);
-    }
-    glEnd();
-
-    //Calling kernel for calculating subsequent positions
-    glFlush();
-    glutSwapBuffers();
-
-    numFrames++;
-    // update window title with FPS
-    if (numFrames >= 100)
-    {
-        char buf[256];
-        sprintf(buf, "MatrixMultiplication - %d pixels, %.02f FPS"
-                , matmul->numElemC, (float)matmul->getFPS());
-        glutSetWindowTitle(buf);
-        numFrames = 0;
-    }
-}
-
-// keyboard function
-void
-keyboardFunc(unsigned char key, int mouseX, int mouseY)
-{
-    switch(key)
-    {
-        // If the user hits escape or Q, then exit
-
-        // ESCAPE_KEY = 27
-    case 27:
-    case 'q':
-    case 'Q':
-    {
-        if(me->cleanup() != SDK_SUCCESS)
-        {
-            exit(1);
-        }
-        else
-        {
-            exit(0);
-        }
-    }
-    default:
-        break;
-    }
-}
-
-int
-MatrixMultiplication::run()
-{
-    // Warm up
-    for(int i = 0; i < 2 && iterations != 1; i++)
-    {
-        // Arguments are set and execution call is enqueued on command buffer
-        if(runCLKernels() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-    }
-
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
-    std::cout << "Executing kernel for " << iterations << " iterations" <<
-              std::endl;
-    std::cout << "-------------------------------------------" << std::endl;
-
-    kernelTime = 0;
-    for(int i = 0; i < iterations; i++)
-    {
-        // Arguments are set and execution call is enqueued on command buffer
-        int kernelRun = runCLKernels();
-        if(kernelRun != SDK_SUCCESS)
-        {
-            return kernelRun;
-        }
-    }
-
-    sampleTimer->stopTimer(timer);
-    appTime = (double)(sampleTimer->readTimer(timer)) / iterations;
-    kernelTime = kernelTime / iterations;
-
-    if(!sampleArgs->quiet)
-    {
-        printArray<cl_float>("Output", output, width1, 1);
-    }
-
-    return SDK_SUCCESS;
-}
-
-int
-MatrixMultiplication::verifyResults()
-{
-    if(sampleArgs->verify)
-    {
-        // reference implementation
-        matrixMultiplicationCPUReference(verificationOutput, input0, input1, height0,
-                                         width0,  width1);
-
-        // compare the results and see if they match
-        if(compare(output, verificationOutput, height0*width1))
-        {
-            std::cout<<"Passed!\n" << std::endl;
-            return SDK_SUCCESS;
-        }
-        else
-        {
-            std::cout<<"Failed\n" << std::endl;
-            return SDK_FAILURE;
-        }
-    }
-
-    return SDK_SUCCESS;
-}
-
-void
-MatrixMultiplication::printStats()
-{
-    if(sampleArgs->timing)
-    {
-        if(eAppGFLOPS)
-        {
-            std::string strArray[4] = {"MatrixA", "MatrixB", "Time(sec)", "[Transfer+kernel]Time(sec)"};
-            std::string stats[4];
-
-            double flops = 2 * width0 * width1;
-            double perf = (flops / appTime) * height0 * 1e-9;
-            if(sampleArgs->timing)
-            {
-                std::cout << "GFlops achieved : " << perf << std::endl << std::endl;
-            }
-
-            sampleTimer->totalTime = setupTime + appTime;
-
-            stats[0]  = toString(height0, std::dec)
-                        +"x"+toString(width0, std::dec);
-            stats[1]  = toString(height1, std::dec)
-                        +"x"+toString(width1, std::dec);
-            stats[2]  = toString(sampleTimer->totalTime, std::dec);
-            stats[3]  = toString(appTime, std::dec);
-
-            printStatistics(strArray, stats, 4);
-        }
-        else
-        {
-            std::string strArray[4] = {"MatrixA", "MatrixB", "Time(sec)", "kernelTime(sec)"};
-            std::string stats[4];
-
-            double flops = 2 * width0 * width1;
-            double perf = (flops / kernelTime) * height0 * 1e-9;
-            if(sampleArgs->timing)
-            {
-                std::cout << "GFlops achieved : " << perf << std::endl << std::endl;
-            }
-
-            sampleTimer->totalTime = setupTime + kernelTime;
-
-            stats[0]  = toString(height0, std::dec)
-                        +"x"+toString(width0, std::dec);
-            stats[1]  = toString(height1, std::dec)
-                        +"x"+toString(width1, std::dec);
-            stats[2]  = toString(sampleTimer->totalTime, std::dec);
-            stats[3]  = toString(kernelTime, std::dec);
-
-            printStatistics(strArray, stats, 4);
-        }
-    }
-}
-
-int
-MatrixMultiplication::cleanup()
-{
-    // Releases OpenCL resources (Context, Memory etc.)
-    cl_int status;
-
-    status = clReleaseKernel(kernel);
-    CHECK_OPENCL_ERROR(status, "clReleaseKernel failed.(kernel)");
-
-    status = clReleaseProgram(program);
-    CHECK_OPENCL_ERROR(status, "clReleaseProgram failed.(program)");
-
-    status = clReleaseMemObject(inputBuffer0);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(inputBuffer0)");
-
-    status = clReleaseMemObject(inputBuffer1);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(inputBuffer1)");
-
-    status = clReleaseMemObject(outputBuffer);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(outputBuffer)");
-
-    status = clReleaseCommandQueue(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clReleaseCommandQueue failed.(commandQueue)");
-
-    status = clReleaseContext(context);
-    CHECK_OPENCL_ERROR(status, "clReleaseContext failed.(context)");
-
-    // release program resources (input memory etc.)
-
-    FREE(input0);
-    FREE(input1);
-    FREE(output);
-    FREE(verificationOutput);
-    FREE(devices);
-
-    return SDK_SUCCESS;
-}
-
-int
-main(int argc, char * argv[])
-{
-    MatrixMultiplication clMatrixMultiplication;
-    me = &clMatrixMultiplication;
-
-    if(clMatrixMultiplication.initialize() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    if(clMatrixMultiplication.sampleArgs->parseCommandLine(argc,
-            argv) != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    if(clMatrixMultiplication.sampleArgs->isDumpBinaryEnabled() != SDK_SUCCESS)
-    {
-        return clMatrixMultiplication.genBinaryImage();
-    }
-    else
-    {
-        // Setup
-        if(clMatrixMultiplication.setup() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-        // // Run
-        // if(clMatrixMultiplication.run() != SDK_SUCCESS)
-        // {
-        //     return SDK_FAILURE;
-        // }
-
-        // // VerifyResults
-        // if(clMatrixMultiplication.verifyResults() != SDK_SUCCESS)
-        // {
-        //     return SDK_FAILURE;
-        // }
-
-        // clMatrixMultiplication.printStats();
-    }
-
-    if(display)
-    {
-        // Run in  graphical window if requested
-        glutInit(&argc, argv);
-        glutInitWindowPosition(100,10);
-        glutInitWindowSize(me->getWidth0(),me->getHeight1());
-        glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
-        glutCreateWindow("MatMul");
-        GLInit();
-        glutDisplayFunc(displayfunc);
-        glutReshapeFunc(reShape);
-        glutIdleFunc(idle);
-        glutKeyboardFunc(keyboardFunc);
-        glutMainLoop();
-    }
-
-    // Cleanup
-    if(clMatrixMultiplication.cleanup() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    return SDK_SUCCESS;
-}

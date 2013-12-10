@@ -159,12 +159,12 @@ DivideUp(int a, int b)
 static long
 GetCurrentTime()
 {
-	// struct timeval tv;
+	struct timeval tv;
 
-	// gettimeofday(&tv, NULL);
+	gettimeofday(&tv, NULL);
 
-	// return tv.tv_usec;
-	return time(NULL);
+	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
+	// return time(NULL);
 }
 
 static double 
@@ -963,7 +963,7 @@ ReportStats(
 
 	if(TimeElapsed && FrameCount && FrameCount > ReportStatsInterval) 
 	{
-		double fMs = (TimeElapsed * 1000.0 / (double) FrameCount);
+        double fMs = (TimeElapsed / (double) FrameCount);
 		double fFps = 1.0 / (fMs / 1000.0);
 
 		sprintf(StatsString, "[%s] Compute: %3.2f ms  Display: %3.2f fps (%s)\n", 

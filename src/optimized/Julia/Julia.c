@@ -424,7 +424,7 @@ Recompute(void)
     size_t sizes[10];
     size_t global[2];
     size_t local[2];
-
+    
     int err = 0;
     unsigned int v = 0, s = 0, a = 0;
     values[v++] = &ComputeResult;

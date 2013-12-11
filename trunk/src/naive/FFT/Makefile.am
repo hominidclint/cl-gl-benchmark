@@ -7,7 +7,6 @@ __top_builddir__bin_naive_FFT_SOURCES = \
 	FFT.hpp
 	
 AM_LDFLAGS = @CL_GL_LDFLAGS@
-AM_CPPFLAGS = @CL_GL_CPPFLAGS@ -I$(top_builddir)/util
-LDADD = $(top_builddir)/util/libsdk.a
+AM_CPPFLAGS = @CL_GL_CPPFLAGS@
 
 endif

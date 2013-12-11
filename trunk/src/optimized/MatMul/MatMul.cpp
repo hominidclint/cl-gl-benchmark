@@ -30,7 +30,7 @@
 #define DEBUG_INFO                      (0)     
 #define COMPUTE_KERNEL_FILENAME         ("MatrixMultiplication_Kernels.cl")
 #define COMPUTE_KERNEL_MATMUL_NAME      ("mmmKernel")
-#define COMPUTE_KERNEL_MATMUL_LDS_NAME  ("mmmKernel")
+#define COMPUTE_KERNEL_MATMUL_LDS_NAME  ("mmmKernel_local")
 #define SEPARATOR                       ("----------------------------------------------------------------------\n")
 #define WIDTH                           (512)
 #define HEIGHT                          (512)
@@ -53,23 +53,23 @@ static int                              WorkGroupItems = 32;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static int Width0						= 512;
-static int Height0						= 512;
-static int Width1						= 512;
-static int Height1						= 512;
+static int Width0                       = 512;
+static int Height0                      = 512;
+static int Width1                       = 512;
+static int Height1                      = 512;
 
 static int Width                        = Width1;
 static int Height                       = Height0;
 
 static int Animated                     = 0;
 static int Update                       = 1;
-static int Lds 							= 0;
+static int Lds                          = 0;
 
-static float *Input0 					= NULL;
-static float *Input1 					= NULL;
-static float *Output 					= NULL;
+static float *Input0                    = NULL;
+static float *Input1                    = NULL;
+static float *Output                    = NULL;
 
-static int BlockSize					= 8;
+static int BlockSize                    = 8;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -105,12 +105,6 @@ static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static int 
-DivideUp(int a, int b) 
-{
-	return ((a % b) != 0) ? (a / b + 1) : (a / b);
-}
-
 static long
 GetCurrentTime()
 {
@@ -119,7 +113,7 @@ GetCurrentTime()
 	gettimeofday(&tv, NULL);
 
 	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
-	// return time(NULL);
+    // return time(NULL);
 }
 
 static double 
@@ -310,37 +304,6 @@ RenderTexture( void *pvData )
 	glDisable( TextureTarget );
 }
 
-static void 
-Interpolate( float m[4], float t, float a[4], float b[4] )
-{
-	int i;
-	for ( i = 0; i < 4; i++ )
-		m[ i ] = ( 1.0f - t ) * a[ i ] + t * b[ i ];
-}
-
-static void 
-UpdateMu( float t[4], float a[4], float b[4] )
-{
-	*t += 0.01f;
-
-	uint seed = (uint)GetCurrentTime();
-
-	if ( *t >= 1.0f )
-	{
-		*t = 0.0f;
-
-		a[ 0 ] = b[ 0 ];
-		a[ 1 ] = b[ 1 ];
-		a[ 2 ] = b[ 2 ];
-		a[ 3 ] = b[ 3 ];
-
-		b[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 3 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	}
-}
-
 static void
 RandomFillArray_Float(float *arrayPtr, int width, int height, float rangeMin, float rangeMax)
 {
@@ -357,8 +320,8 @@ RandomFillArray_Float(float *arrayPtr, int width, int height, float rangeMin, fl
 				int index = i*width + j;
 				arrayPtr[index] = rangeMin + float(range*rand()/(RAND_MAX + 1.0));
 			}
+		}
 	}
-}
 
 static float *
 CreateRandomFilledArray_Float(int width, int height, float rangeMin, float rangeMax)
@@ -372,34 +335,6 @@ CreateRandomFilledArray_Float(int width, int height, float rangeMin, float range
 	return array;
 }
 
-static void
-RandomColor( float v[4] )
-{
-	uint seed = (uint)GetCurrentTime();
-	v[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 3 ] = 1.0f;
-}
-
-static void 
-UpdateColor( float t[4], float a[4], float b[4] )
-{
-	*t += 0.01f;
-
-	if ( *t >= 1.0f )
-	{
-		*t = 0.0f;
-
-		a[ 0 ] = b[ 0 ];
-		a[ 1 ] = b[ 1 ];
-		a[ 2 ] = b[ 2 ];
-		a[ 3 ] = b[ 3 ];
-
-		RandomColor(b);
-	}
-}
-
 static int
 Recompute(void)
 {
@@ -408,8 +343,8 @@ Recompute(void)
 
 	void *values[5];
 	size_t sizes[5];
-    size_t global[2];
-    size_t local[2];
+	size_t global[2];
+	size_t local[2];
 
 	int err = 0;
 	unsigned int v = 0, s = 0, a = 0;
@@ -446,10 +381,10 @@ Recompute(void)
 			return -10;
 	}
 
-    global[0] = Width1 / 4;
-    global[1] = Height0/ 4;
-    local[0] = BlockSize;
-    local[1] = BlockSize;
+	global[0] = Width1 / 4;
+	global[1] = Height0/ 4;
+	local[0] = BlockSize;
+	local[1] = BlockSize;
 
 #if (DEBUG_INFO)
 	if(FrameCount <= 1)
@@ -511,8 +446,9 @@ Recompute(void)
 static int 
 CreateComputeResource(void)
 {
-	int err = 0;
 
+	cl_int err;
+	
 #if (USE_GL_ATTACHMENTS)
 
 	if(ComputeImage)
@@ -593,7 +529,7 @@ SetupComputeDevices(int gpu)
 	printf(SEPARATOR);
 	printf("Using active OpenGL context...\n");
 
-    // Bind to platform
+// Bind to platform
 	cl_platform_id platform_id;
 
 	cl_uint numPlatforms;
@@ -633,7 +569,7 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-  // Get ID for the device
+// Get ID for the device
 	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
 	if (err != CL_SUCCESS)
 	{
@@ -641,7 +577,7 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-  // Create a context  
+// Create a context  
 	cl_context_properties properties[] =
 	{
 		CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
@@ -650,8 +586,8 @@ SetupComputeDevices(int gpu)
 		0
 	};
 
-    // Create a context from a CGL share group
-    //
+// Create a context from a CGL share group
+//
 	ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
 	if (!ComputeContext)
 	{
@@ -661,7 +597,7 @@ SetupComputeDevices(int gpu)
 
 #else
 
-    // Bind to platform
+// Bind to platform
 	cl_platform_id platform_id;
 
 	cl_uint numPlatforms;
@@ -701,7 +637,7 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-  // Get ID for the device
+// Get ID for the device
 	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
 	if (err != CL_SUCCESS)
 	{
@@ -709,8 +645,8 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-    // Create a context containing the compute device(s)
-    //
+// Create a context containing the compute device(s)
+//
 	ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
 	if (!ComputeContext)
 	{
@@ -732,7 +668,7 @@ SetupComputeDevices(int gpu)
 
 	device_count = returned_size / sizeof(cl_device_id);
 
-	int i = 0;
+	unsigned int i = 0;
 	int device_found = 0;
 	cl_device_type device_type; 
 	for(i = 0; i < device_count; i++) 
@@ -752,8 +688,8 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-    // Create a command queue
-    //
+// Create a command queue
+//
 	ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
 	if (!ComputeCommands)
 	{
@@ -761,8 +697,8 @@ SetupComputeDevices(int gpu)
 		return EXIT_FAILURE;
 	}
 
-    // Report the device vendor and device name
-    // 
+// Report the device vendor and device name
+// 
 	cl_char vendor_name[1024] = {0};
 	cl_char device_name[1024] = {0};
 	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
@@ -807,8 +743,8 @@ SetupComputeKernel(void)
 	printf("%s", source);
 #endif
 
-    // Create the compute program from the source buffer
-    //
+// Create the compute program from the source buffer
+//
 	ComputeProgram = clCreateProgramWithSource(ComputeContext, 1, (const char **) & source, NULL, &err);
 	if (!ComputeProgram || err != CL_SUCCESS)
 	{
@@ -817,8 +753,8 @@ SetupComputeKernel(void)
 	}
 	free(source);
 
-    // Build the program executable
-    //
+// Build the program executable
+//
 	err = clBuildProgram(ComputeProgram, 0, NULL, NULL, NULL, NULL);
 	if (err != CL_SUCCESS)
 	{
@@ -831,8 +767,8 @@ SetupComputeKernel(void)
 		return EXIT_FAILURE;
 	}
 
-    // Create the compute kernel from within the program
-    //
+// Create the compute kernel from within the program
+//
 	if (Lds)
 	{
 		printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_MATMUL_LDS_NAME); 
@@ -850,8 +786,8 @@ SetupComputeKernel(void)
 		return EXIT_FAILURE;
 	}
 
-    // Get the maximum work group size for executing the kernel on the device
-    //
+// Get the maximum work group size for executing the kernel on the device
+//
 	err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxWorkGroupSize, NULL);
 	if (err != CL_SUCCESS)
 	{
@@ -1023,7 +959,7 @@ ReportStats(
 {
 	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
 
-	if(TimeElapsed && FrameCount && FrameCount > ReportStatsInterval) 
+	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
 	{
 		double fMs = (TimeElapsed / (double) FrameCount);
 		double fFps = 1.0 / (fMs / 1000.0);
@@ -1064,12 +1000,12 @@ Display_(void)
 	RenderTexture(HostImageBuffer);
 	ReportInfo();
 
-    glFinish(); // for timing
-    
-    uint64_t uiEndTime = GetCurrentTime();
-    ReportStats(uiStartTime, uiEndTime);
-    DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
-    glutSwapBuffers();
+	glFinish(); // for timing
+
+	uint64_t uiEndTime = GetCurrentTime();
+	ReportStats(uiStartTime, uiEndTime);
+	DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+	glutSwapBuffers();
 }
 
 static void 
@@ -1098,8 +1034,6 @@ Reshape (int w, int h)
 
 void Keyboard( unsigned char key, int x, int y )
 {
-	const float fStepSize = 0.05f;
-
 	switch( key )
 	{
 		case 27:

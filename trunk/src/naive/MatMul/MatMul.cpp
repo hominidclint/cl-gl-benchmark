@@ -30,7 +30,7 @@
 #define DEBUG_INFO                      (0)     
 #define COMPUTE_KERNEL_FILENAME         ("MatrixMultiplication_Kernels.cl")
 #define COMPUTE_KERNEL_MATMUL_NAME      ("mmmKernel")
-#define COMPUTE_KERNEL_MATMUL_LDS_NAME  ("mmmKernel")
+#define COMPUTE_KERNEL_MATMUL_LDS_NAME  ("mmmKernel_local")
 #define SEPARATOR                       ("----------------------------------------------------------------------\n")
 #define WIDTH                           (512)
 #define HEIGHT                          (512)
@@ -104,12 +104,6 @@ static float VertexPos[4][2]            = { { -1.0f, -1.0f },
 static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
-
-static int 
-DivideUp(int a, int b) 
-{
-	return ((a % b) != 0) ? (a / b + 1) : (a / b);
-}
 
 static long
 GetCurrentTime()
@@ -310,37 +304,6 @@ RenderTexture( void *pvData )
 	glDisable( TextureTarget );
 }
 
-static void 
-Interpolate( float m[4], float t, float a[4], float b[4] )
-{
-	int i;
-	for ( i = 0; i < 4; i++ )
-		m[ i ] = ( 1.0f - t ) * a[ i ] + t * b[ i ];
-}
-
-static void 
-UpdateMu( float t[4], float a[4], float b[4] )
-{
-	*t += 0.01f;
-
-	uint seed = (uint)GetCurrentTime();
-
-	if ( *t >= 1.0f )
-	{
-		*t = 0.0f;
-
-		a[ 0 ] = b[ 0 ];
-		a[ 1 ] = b[ 1 ];
-		a[ 2 ] = b[ 2 ];
-		a[ 3 ] = b[ 3 ];
-
-		b[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-		b[ 3 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	}
-}
-
 static void
 RandomFillArray_Float(float *arrayPtr, int width, int height, float rangeMin, float rangeMax)
 {
@@ -370,34 +333,6 @@ CreateRandomFilledArray_Float(int width, int height, float rangeMin, float range
 	RandomFillArray_Float(array, width, height, rangeMin, rangeMax);
 
 	return array;
-}
-
-static void
-RandomColor( float v[4] )
-{
-	uint seed = (uint)GetCurrentTime();
-	v[ 0 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 1 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 2 ] = 2.0f * rand_r(&seed) / (float) RAND_MAX - 1.0f;
-	v[ 3 ] = 1.0f;
-}
-
-static void 
-UpdateColor( float t[4], float a[4], float b[4] )
-{
-	*t += 0.01f;
-
-	if ( *t >= 1.0f )
-	{
-		*t = 0.0f;
-
-		a[ 0 ] = b[ 0 ];
-		a[ 1 ] = b[ 1 ];
-		a[ 2 ] = b[ 2 ];
-		a[ 3 ] = b[ 3 ];
-
-		RandomColor(b);
-	}
 }
 
 static int
@@ -511,7 +446,6 @@ Recompute(void)
 static int 
 CreateComputeResource(void)
 {
-	int err = 0;
 
 #if (USE_GL_ATTACHMENTS)
 
@@ -732,7 +666,7 @@ SetupComputeDevices(int gpu)
 
 	device_count = returned_size / sizeof(cl_device_id);
 
-	int i = 0;
+	unsigned int i = 0;
 	int device_found = 0;
 	cl_device_type device_type; 
 	for(i = 0; i < device_count; i++) 
@@ -1023,7 +957,7 @@ ReportStats(
 {
 	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
 
-	if(TimeElapsed && FrameCount && FrameCount > ReportStatsInterval) 
+	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
 	{
 		double fMs = (TimeElapsed / (double) FrameCount);
 		double fFps = 1.0 / (fMs / 1000.0);
@@ -1098,8 +1032,6 @@ Reshape (int w, int h)
 
 void Keyboard( unsigned char key, int x, int y )
 {
-	const float fStepSize = 0.05f;
-
 	switch( key )
 	{
 		case 27:

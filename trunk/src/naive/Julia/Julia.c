@@ -517,8 +517,7 @@ Recompute(void)
 static int 
 CreateComputeResult(void)
 {
-	int err = 0;
-
+	
 #if (USE_GL_ATTACHMENTS)
 
 	if(ComputeImage)

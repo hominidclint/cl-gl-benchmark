@@ -19,13 +19,14 @@
 #include <sys/time.h>
 
 #include <GL/glew.h>
+#include <GL/glx.h>
 #include <GL/freeglut.h>
 #include <CL/cl.h>
 #include <CL/cl_gl.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
+#define USE_GL_ATTACHMENTS              (1)  // enable OpenGL attachments for Compute results
 #define DEBUG_INFO                      (0)     
 #define COMPUTE_KERNEL_FILENAME         ("FFT_Kernels.cl")
 #define COMPUTE_KERNEL_MATMUL_NAME      ("kfft")
@@ -253,8 +254,8 @@ static void DrawText(float x, float y, int light, const char *format, ...)
 	glViewport(iVP[0], iVP[1], iVP[2], iVP[3]);
 }
 
-static void
-CreateVBOs()
+static int
+CreateGLResouce()
 {
 	glGenVertexArrays(1, &VaoID);
 	glBindVertexArray(VaoID);
@@ -274,6 +275,8 @@ CreateVBOs()
 	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
 	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(1);
+
+	return 1;
 }
 
 static void
@@ -329,54 +332,53 @@ Recompute(void)
 
 #if (USE_GL_ATTACHMENTS)
 
-	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to acquire GL object! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to acquire GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
-	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputImaginary, 0, 0, 0);
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to acquire GL object! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputImaginary, 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to acquire GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
 #else
 
-	err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputReal, 1, 0, 
-		DataElemCount * sizeof(float), DataReal, 0, 0, NULL);
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to write buffer! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputReal, 1, 0, 
+			DataElemCount * sizeof(float), DataReal, 0, 0, NULL);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to write buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
-	err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputImaginary, 1, 0, 
-		DataElemCount * sizeof(float), DataImaginary, 0, 0, NULL);
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to write buffer! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputImaginary, 1, 0, 
+			DataElemCount * sizeof(float), DataImaginary, 0, 0, NULL);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to write buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
 #endif
 
-	Update = 0;
-	err = CL_SUCCESS;
-	for (a = 0; a < s; a++)
-		err |= clSetKernelArg(ComputeKernel, a, sizes[a], values[a]);
+		Update = 0;
+		err = CL_SUCCESS;
+		for (a = 0; a < s; a++)
+			err |= clSetKernelArg(ComputeKernel, a, sizes[a], values[a]);
 
-	if (err)
-		return -10;
-	}
+		if (err)
+			return -10;
 
-	size_t global[1];
-	size_t local[1];
+		size_t global[1];
+		size_t local[1];
 
-	global[0] = DataElemCount;
-	local[0] = 64;
+		global[0] = DataElemCount;
+		local[0] = 64;
 
 #if (DEBUG_INFO)
 	if(FrameCount <= 1)
@@ -385,46 +387,47 @@ Recompute(void)
 			(int)local[0], (int)local[1]);
 #endif
 
-	err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 2, NULL, global, local, 0, NULL, NULL);
-	if (err)
-	{
-		printf("Failed to enqueue kernel! %d\n", err);
-		return err;
-	}
+		err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 1, NULL, global, local, 0, NULL, NULL);
+		if (err)
+		{
+			printf("Failed to enqueue kernel! %d\n", err);
+			return err;
+		}
 
 #if (USE_GL_ATTACHMENTS)
 
-    err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
-    if (err != CL_SUCCESS)
-    {
-        printf("Failed to release GL object! %d\n", err);
-        return EXIT_FAILURE;
-    }
+		err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to release GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
-    err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeInputOutputImaginary, 0, 0, 0);
-    if (err != CL_SUCCESS)
-    {
-        printf("Failed to release GL object! %d\n", err);
-        return EXIT_FAILURE;
-    }
+		err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeInputOutputImaginary, 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to release GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
 #else
 
-	err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataReal, 0, NULL, NULL );      
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to read buffer! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataReal, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
-	err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputImaginary, CL_TRUE, 0, DataElemCount * sizeof(float), DataImaginary, 0, NULL, NULL );      
-	if (err != CL_SUCCESS)
-	{
-		printf("Failed to read buffer! %d\n", err);
-		return EXIT_FAILURE;
-	}
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputImaginary, CL_TRUE, 0, DataElemCount * sizeof(float), DataImaginary, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
 
 #endif
+	}
 
 	return CL_SUCCESS;
 }
@@ -871,7 +874,14 @@ Shutdown(void)
 static int 
 SetupGraphics(void)
 {
-	CreateVBOs();
+	GLenum GlewInitResult;
+
+	GlewInitResult = glewInit();
+	if (GlewInitResult != GLEW_OK)
+	{
+		fprintf(stderr, "ERROR: %s\n", glewGetErrorString(GlewInitResult));
+		exit(1);
+	}
 
 	glClearColor (0.0, 0.0, 0.0, 0.0);
 
@@ -881,7 +891,6 @@ SetupGraphics(void)
 	glLoadIdentity();
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-
 
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glVertexPointer(2, GL_FLOAT, 0, VertexPos);
@@ -924,6 +933,14 @@ Initialize(int gpu)
 		printf ("Failed to setup OpenGL Shader! Error %d\n", err);
 		exit (err);
 	}
+
+	err = CreateGLResouce();
+	if (err != 1)
+	{
+		printf ("Failed to create GL resource! Error %d\n", err);
+		exit (err);
+	}
+
 
 	err = SetupComputeKernel();
 	if (err != CL_SUCCESS)
@@ -1016,7 +1033,7 @@ Display_(void)
 		exit(1);
 	}
 
-	glDrawArrays(GL_LINE, 0, DataElemCount);
+	glDrawArrays(GL_LINE, 0, DataElemCount / 4);
 	ReportInfo();
 
 	glFinish(); // for timing

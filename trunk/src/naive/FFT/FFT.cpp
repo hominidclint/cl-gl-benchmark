@@ -34,9 +34,10 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-
-
-
+#define DATA_REAL_MIN                   (0.0)
+#define DATA_REAL_MAX                   (10.0)
+#define DATA_IMAG_MIN                   (0.0)
+#define DATA_IMAG_MAX                   (10.0)
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -83,9 +84,6 @@ static cl_device_id                     ComputeDeviceId;
 static cl_device_type                   ComputeDeviceType;
 static cl_mem                           ComputeInputOutputReal;
 static cl_mem                           ComputeInputOutputImaginary;
-static size_t                           MaxWorkGroupSize;
-static int                              WorkGroupSize[2];
-static int                              WorkGroupItems = 32;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -106,6 +104,7 @@ static int DataElemCount                = DataWidth * DataHeight;
 
 static double TimeElapsed               = 0;
 static int FrameCount                   = 0;
+static int NDRangeCount                 = 0;
 static uint ReportStatsInterval         = 30;
 
 static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -284,16 +283,64 @@ CreateRandomFilledArray_Float(int width, int height, float rangeMin, float range
 	return array;
 }
 
-static int
-CreateGLResouce()
+static int 
+InitData()
 {
 	if (DataReal)
 		free(DataReal);
-	DataReal = CreateRandomFilledArray_Float(Width, Height, 0.0, 9.0);
+	DataReal = CreateRandomFilledArray_Float(Width, Height, DATA_REAL_MIN, DATA_REAL_MAX);
+
 	if (DataImaginary)
 		free(DataImaginary);
-	DataImaginary = CreateRandomFilledArray_Float(Width, Height, 0.0, 9.0);
+	DataImaginary = CreateRandomFilledArray_Float(Width, Height, DATA_IMAG_MIN, DATA_IMAG_MAX);
 
+	return 1;
+}
+
+static int
+UpdateData()
+{
+	RandomFillArray_Float(DataReal, Width, Height, 0.0, 100.0);
+	RandomFillArray_Float(DataImaginary, Width, Height, 0.0, 100.0);
+
+	return 1;
+}
+
+static int
+UpdateVBOs()
+{
+		if (VboRealID)
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
+			glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+			glEnableVertexAttribArray(0);
+		}
+		else
+		{
+			printf("Invalid VboRealID\n");
+			return -1;
+		}
+
+		if (VboImaginnaryID)
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
+			glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
+			glEnableVertexAttribArray(0);
+		}
+		else
+		{
+			printf("Invalid VboRealID\n");
+			return -1;
+		}
+
+		return 1;
+}
+
+static int
+CreateGLResouce()
+{
 	glGenVertexArrays(1, &VaoID);
 	glBindVertexArray(VaoID);
 	if (!VaoID)
@@ -311,9 +358,17 @@ CreateGLResouce()
 		return -1;
 	}
 	glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
-	glEnableVertexAttribArray(0);
+	if (DataReal)
+	{
+		glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
+		glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+		glEnableVertexAttribArray(0);
+	}
+	else
+	{
+		printf("DataReal is not ready!\n");
+		return -1;
+	}
 
 	if (VboImaginnaryID)
 		glDeleteBuffers(1, &VboImaginnaryID);
@@ -324,9 +379,17 @@ CreateGLResouce()
 		return -1;
 	}
 	glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
-	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
-	glEnableVertexAttribArray(1);
+	if (DataImaginary)
+	{
+		glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
+		glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
+		glEnableVertexAttribArray(1);		
+	}
+	else
+	{
+		printf("DataImaginary is not ready\n");
+		return -1;
+	}
 
 	return 1;
 }
@@ -352,6 +415,8 @@ Recompute(void)
 	{
 
 		glFinish();
+
+		// If use shared context, then data for ComputeInputOutput* is already in Vbo*
 #if (USE_GL_ATTACHMENTS)
 
 		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
@@ -368,7 +433,7 @@ Recompute(void)
 			return EXIT_FAILURE;
 		}
 
-#if DEBUG_INFO
+#if (DEBUG_INFO)
 
 		float *DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
 		float *DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
@@ -388,7 +453,7 @@ Recompute(void)
 		}
 
 		for (int i = 0; i < DataElemCount; ++i)
-			printf("Before NDRange %d - %d: [%f %f] - [%f %f]\n", FrameCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
+			printf("Before NDRange %d - %d: [%f %f] - [%f %f]\n", NDRangeCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
 
 		free(DataRealReadBack);
 		free(DataImaginaryReadBack);
@@ -397,6 +462,7 @@ Recompute(void)
 
 #else
 
+		// Not sharing context with OpenGL, needs to explicitly copy/write to exchange data
 		err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputReal, 1, 0, 
 			DataElemCount * sizeof(float), DataReal, 0, 0, NULL);
 		if (err != CL_SUCCESS)
@@ -441,10 +507,12 @@ Recompute(void)
 			return err;
 		}
 
+		NDRangeCount++;
+
 #if DEBUG_INFO
 
-		DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
-		DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		float *DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		float *DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
 
 		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataRealReadBack, 0, NULL, NULL );      
 		if (err != CL_SUCCESS)
@@ -461,7 +529,7 @@ Recompute(void)
 		}
 
 		for (int i = 0; i < DataElemCount; ++i)
-			printf("After NDRange %d - %d: [%f %f] - [%f %f]\n", FrameCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
+			printf("After NDRange %d - %d: [%f %f] - [%f %f]\n", NDRangeCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
 
 		free(DataRealReadBack);
 		free(DataImaginaryReadBack);
@@ -470,6 +538,7 @@ Recompute(void)
 
 #if (USE_GL_ATTACHMENTS)
 
+		// Release control and the data is already in VBOs
 		err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
 		if (err != CL_SUCCESS)
 		{
@@ -485,7 +554,7 @@ Recompute(void)
 		}
 
 #else
-
+		// Explicitly copy data back to host and update VBOs
 		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataReal, 0, NULL, NULL );      
 		if (err != CL_SUCCESS)
 		{
@@ -500,7 +569,9 @@ Recompute(void)
 			return EXIT_FAILURE;
 		}
 
+		UpdateVBOs();
 #endif
+
 		clFinish(ComputeCommands);
 	}
 
@@ -578,6 +649,7 @@ CreateComputeResource(void)
 	printf("Allocating compute input/output real part for FFT in device memory...\n");
 	ComputeInputOutputImaginary = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
 			sizeof(float) * DataElemCount, 0, &err);
+	if (!ComputeInputOutputImaginary || err != CL_SUCCESS)
 	{
 		printf("Failed to create OpenGL VBO reference! %d\n", err);
 		return -1;
@@ -890,27 +962,7 @@ SetupComputeKernel(void)
 		return EXIT_FAILURE;
 	}
 
-	// Get the maximum work group size for executing the kernel on the device
-	//
-	err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxWorkGroupSize, NULL);
-	if (err != CL_SUCCESS)
-	{
-		printf("Error: Failed to retrieve kernel work group info! %d\n", err);
-		exit(1);
-	}
-
-#if (DEBUG_INFO)
-	printf("MaxWorkGroupSize: %d\n", MaxWorkGroupSize);
-	printf("WorkGroupItems: %d\n", WorkGroupItems);
-#endif
-
-	WorkGroupSize[0] = (MaxWorkGroupSize > 1) ? (MaxWorkGroupSize / WorkGroupItems) : MaxWorkGroupSize;
-	WorkGroupSize[1] = MaxWorkGroupSize / WorkGroupSize[0];
-
-	printf(SEPARATOR);
-
 	return CL_SUCCESS;
-
 }
 
 static void
@@ -990,22 +1042,17 @@ Initialize(int gpu)
 		exit (err);
 	}
 
-	cl_bool image_support;
-	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_IMAGE_SUPPORT,
-		sizeof(image_support), &image_support, NULL);
-	if (err != CL_SUCCESS) {
-		printf("Unable to query device for image support");
-		exit(err);
-	}
-	if (image_support == CL_FALSE) {
-		printf("MatMul requires images: Images not supported on this device.");
-		return CL_IMAGE_FORMAT_NOT_SUPPORTED;
-	}
-
 	err = SetupGLProgram();
 	if (err != 1)
 	{
 		printf ("Failed to setup OpenGL Shader! Error %d\n", err);
+		exit (err);
+	}
+
+	err = InitData();
+	if (err != 1)
+	{
+		printf ("Failed to Init FFT Data! Error %d\n", err);
 		exit (err);
 	}
 
@@ -1016,6 +1063,7 @@ Initialize(int gpu)
 		exit (err);
 	}
 
+	glFinish();
 
 	err = SetupComputeKernel();
 	if (err != CL_SUCCESS)
@@ -1030,6 +1078,8 @@ Initialize(int gpu)
 		printf ("Failed to create compute result! Error %d\n", err);
 		exit (err);
 	}
+
+	clFlush(ComputeCommands);
 
 	return CL_SUCCESS;
 }
@@ -1094,34 +1144,8 @@ Display_(void)
 
 	if(Animated)
 	{
-		RandomFillArray_Float(DataReal, Width, Height, 0.0, 100.0);
-		RandomFillArray_Float(DataImaginary, Width, Height, 0.0, 100.0);
-
-		if (VboRealID)
-		{
-			glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
-			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
-			glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
-			glEnableVertexAttribArray(0);
-		}
-		else
-		{
-			printf("Invalid VboRealID\n");
-			exit(0);
-		}
-
-		if (VboImaginnaryID)
-		{
-			glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
-			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
-			glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
-			glEnableVertexAttribArray(0);
-		}
-		else
-		{
-			printf("Invalid VboRealID\n");
-			exit(0);
-		}
+		UpdateData();
+		UpdateVBOs();
 	}
 
 	int err = Recompute();
@@ -1131,7 +1155,7 @@ Display_(void)
 		exit(1);
 	}
 
-	glDrawArrays(GL_POINTS, 0, DataElemCount / 4);
+	glDrawArrays(GL_POINTS, 0, DataElemCount);
 	ReportInfo();
 
 	glFinish(); // for timing

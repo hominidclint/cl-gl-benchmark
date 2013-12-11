@@ -26,7 +26,7 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define USE_GL_ATTACHMENTS              (1)  // enable OpenGL attachments for Compute results
+#define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
 #define DEBUG_INFO                      (0)     
 #define COMPUTE_KERNEL_FILENAME         ("FFT_Kernels.cl")
 #define COMPUTE_KERNEL_MATMUL_NAME      ("kfft")
@@ -58,8 +58,8 @@ const char *VertexShaderSource =
 
 	"void main(void)\n"
 	"{\n"
-	"	gl_Position = fft_real;\n"
-	"	ex_Color = fft_imaginary;\n"
+	"	gl_Position = fft_imaginary / fft_real;\n"
+	"	ex_Color = vec4(1.0, 1.0, 1.0, 1.0);\n"
 	"}\n";
 
 const char *FragShaderSource = 
@@ -92,8 +92,8 @@ static int                              WorkGroupItems = 32;
 static int Animated                     = 0;
 static int Update                       = 1;
 
-static int Width                        = 512;
-static int Height                       = 512;
+static int Width                        = 128;
+static int Height                       = 128;
 
 static float *DataReal                  = NULL;
 static float *DataImaginary             = NULL;
@@ -132,7 +132,6 @@ GetCurrentTime()
 	gettimeofday(&tv, NULL);
 
 	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
-    // return time(NULL);
 }
 
 static double 
@@ -254,37 +253,12 @@ static void DrawText(float x, float y, int light, const char *format, ...)
 	glViewport(iVP[0], iVP[1], iVP[2], iVP[3]);
 }
 
-static int
-CreateGLResouce()
-{
-	glGenVertexArrays(1, &VaoID);
-	glBindVertexArray(VaoID);
-
-	if (VboRealID)
-		glDeleteBuffers(1, &VboRealID);
-	glGenBuffers(1, &VboRealID);
-	glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
-	glEnableVertexAttribArray(0);
-
-	if (VboImaginnaryID)
-		glDeleteBuffers(1, &VboImaginnaryID);
-	glGenBuffers(1, &VboImaginnaryID);
-	glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
-	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
-	glEnableVertexAttribArray(1);
-
-	return 1;
-}
-
 static void
 RandomFillArray_Float(float *arrayPtr, int width, int height, float rangeMin, float rangeMax)
 {
 	if (arrayPtr)
 	{
-		unsigned int seed = (unsigned int)time(NULL);
+		unsigned int seed = (unsigned int)GetCurrentTime();
 
 		srand(seed);
 		double range = double(rangeMax - rangeMin) + 1.0;
@@ -311,6 +285,53 @@ CreateRandomFilledArray_Float(int width, int height, float rangeMin, float range
 }
 
 static int
+CreateGLResouce()
+{
+	if (DataReal)
+		free(DataReal);
+	DataReal = CreateRandomFilledArray_Float(Width, Height, 0.0, 9.0);
+	if (DataImaginary)
+		free(DataImaginary);
+	DataImaginary = CreateRandomFilledArray_Float(Width, Height, 0.0, 9.0);
+
+	glGenVertexArrays(1, &VaoID);
+	glBindVertexArray(VaoID);
+	if (!VaoID)
+	{
+		printf("VAO generating failed!\n");
+		return -1;
+	}
+
+	if (VboRealID)
+		glDeleteBuffers(1, &VboRealID);
+	glGenBuffers(1, &VboRealID);
+	if (!VboRealID)
+	{
+		printf("VBO VboRealID generating failed\n");
+		return -1;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+	glEnableVertexAttribArray(0);
+
+	if (VboImaginnaryID)
+		glDeleteBuffers(1, &VboImaginnaryID);
+	glGenBuffers(1, &VboImaginnaryID);
+	if (!VboImaginnaryID)
+	{
+		printf("VBO VboImaginnaryID generating failed\n");
+		return -1;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
+	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
+	glEnableVertexAttribArray(1);
+
+	return 1;
+}
+
+static int
 Recompute(void)
 {
 	if(!ComputeKernel)
@@ -330,6 +351,7 @@ Recompute(void)
 	if(Animated || Update)
 	{
 
+		glFinish();
 #if (USE_GL_ATTACHMENTS)
 
 		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeInputOutputReal, 0, 0, 0);
@@ -345,6 +367,33 @@ Recompute(void)
 			printf("Failed to acquire GL object! %d\n", err);
 			return EXIT_FAILURE;
 		}
+
+#if DEBUG_INFO
+
+		float *DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		float *DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataRealReadBack, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputImaginary, CL_TRUE, 0, DataElemCount * sizeof(float), DataImaginaryReadBack, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		for (int i = 0; i < DataElemCount; ++i)
+			printf("Before NDRange %d - %d: [%f %f] - [%f %f]\n", FrameCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
+
+		free(DataRealReadBack);
+		free(DataImaginaryReadBack);
+
+#endif
 
 #else
 
@@ -365,7 +414,6 @@ Recompute(void)
 		}
 
 #endif
-
 		Update = 0;
 		err = CL_SUCCESS;
 		for (a = 0; a < s; a++)
@@ -382,9 +430,8 @@ Recompute(void)
 
 #if (DEBUG_INFO)
 	if(FrameCount <= 1)
-		printf("Global[%4d %4d] Local[%4d %4d]\n", 
-			(int)global[0], (int)global[1],
-			(int)local[0], (int)local[1]);
+		printf("Global[%4d] Local[%4d]\n", 
+			(int)global[0], (int)local[0]);
 #endif
 
 		err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 1, NULL, global, local, 0, NULL, NULL);
@@ -393,6 +440,33 @@ Recompute(void)
 			printf("Failed to enqueue kernel! %d\n", err);
 			return err;
 		}
+
+#if DEBUG_INFO
+
+		DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataRealReadBack, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputImaginary, CL_TRUE, 0, DataElemCount * sizeof(float), DataImaginaryReadBack, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		for (int i = 0; i < DataElemCount; ++i)
+			printf("After NDRange %d - %d: [%f %f] - [%f %f]\n", FrameCount, i, DataReal[i], DataImaginary[i], DataRealReadBack[i], DataImaginaryReadBack[i]);
+
+		free(DataRealReadBack);
+		free(DataImaginaryReadBack);
+
+#endif
 
 #if (USE_GL_ATTACHMENTS)
 
@@ -427,6 +501,7 @@ Recompute(void)
 		}
 
 #endif
+		clFinish(ComputeCommands);
 	}
 
 	return CL_SUCCESS;
@@ -467,7 +542,7 @@ CreateComputeResource(void)
 			clReleaseMemObject(ComputeInputOutputImaginary);
 		ComputeInputOutputImaginary = 0;
 
-		printf("Allocating compute input/output real part for FFT in device memory...\n");
+		printf("Allocating compute input/output imaginary part for FFT in device memory...\n");
 		ComputeInputOutputImaginary = clCreateFromGLBuffer(ComputeContext, CL_MEM_READ_WRITE, VboImaginnaryID, &err);
 		if (!ComputeInputOutputImaginary || err != CL_SUCCESS)
 		{
@@ -956,9 +1031,6 @@ Initialize(int gpu)
 		exit (err);
 	}
 
-	DataReal = CreateRandomFilledArray_Float(Width, Height, 0.0, 10.0);
-	DataImaginary = CreateRandomFilledArray_Float(Width, Height, 0.0, 10.0);
-
 	return CL_SUCCESS;
 }
 
@@ -1022,8 +1094,34 @@ Display_(void)
 
 	if(Animated)
 	{
-		RandomFillArray_Float(DataReal, Width, Height, 0.0, 10.0);
-		RandomFillArray_Float(DataImaginary, Width, Height, 0.0, 10.0);
+		RandomFillArray_Float(DataReal, Width, Height, 0.0, 100.0);
+		RandomFillArray_Float(DataImaginary, Width, Height, 0.0, 100.0);
+
+		if (VboRealID)
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataReal, GL_STATIC_DRAW);
+			glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+			glEnableVertexAttribArray(0);
+		}
+		else
+		{
+			printf("Invalid VboRealID\n");
+			exit(0);
+		}
+
+		if (VboImaginnaryID)
+		{
+			glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(float) * DataElemCount, DataImaginary, GL_STATIC_DRAW);
+			glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
+			glEnableVertexAttribArray(0);
+		}
+		else
+		{
+			printf("Invalid VboRealID\n");
+			exit(0);
+		}
 	}
 
 	int err = Recompute();
@@ -1033,7 +1131,7 @@ Display_(void)
 		exit(1);
 	}
 
-	glDrawArrays(GL_LINE, 0, DataElemCount / 4);
+	glDrawArrays(GL_POINTS, 0, DataElemCount / 4);
 	ReportInfo();
 
 	glFinish(); // for timing

@@ -101,8 +101,8 @@ static int DataHeight                   = Height;
 static int DataElemCount                = DataWidth * DataHeight;
 
 ////////////////////////////////////////////////////////////////////////////////
-
-static double TimeElapsed               = 0;
+static
+ double TimeElapsed               = 0;
 static int FrameCount                   = 0;
 static int NDRangeCount                 = 0;
 static uint ReportStatsInterval         = 30;
@@ -511,8 +511,8 @@ Recompute(void)
 
 #if DEBUG_INFO
 
-		float *DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
-		float *DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
+		DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
 
 		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataRealReadBack, 0, NULL, NULL );      
 		if (err != CL_SUCCESS)
@@ -1155,7 +1155,7 @@ Display_(void)
 		exit(1);
 	}
 
-	glDrawArrays(GL_POINTS, 0, DataElemCount);
+	glDrawArrays(GL_POINTS, 0, DataElemCount / 4);
 	ReportInfo();
 
 	glFinish(); // for timing

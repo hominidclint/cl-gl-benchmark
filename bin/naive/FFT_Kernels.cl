@@ -98,7 +98,7 @@ __attribute__((always_inline)) float
 k_sincos(int i, float *cretp)
 {
     if (i > 512)
-	i -= 1024;
+    i -= 1024;
 
     float x = i * -ANGLE;
     *cretp = native_cos(x);
@@ -125,9 +125,9 @@ k_sincos4(int4 i, float4 *cretp)
 
 #define TWAPPLY(ZR, ZI, C, S) \
     do { \
-	float4 __r = C * ZR - S * ZI; \
-	ZI = C * ZI + S * ZR; \
-	ZR = __r; \
+    float4 __r = C * ZR - S * ZI; \
+    ZI = C * ZI + S * ZR; \
+    ZR = __r; \
     } while (0)
 
 # define TW4IDDLE4() \
@@ -178,8 +178,8 @@ k_sincos4(int4 i, float4 *cretp)
 // First pass of 1K FFT
 __attribute__((always_inline)) void
 kfft_pass1(uint me,
-	    const __global float *gr, const __global float *gi,
-	    __local float *lds)
+        const __global float *gr, const __global float *gi,
+        __local float *lds)
 {
     const __global float4 *gp;
     __local float *lp;
@@ -626,8 +626,8 @@ kfft_pass4(uint me, __local float *lds)
 // Fifth and last pass of 1K FFT
 __attribute__((always_inline)) void
 kfft_pass5(uint me,
-	   const __local float *lds,
-	   __global float *gr, __global float *gi)
+       const __local float *lds,
+       __global float *gr, __global float *gi)
 {
     const __local float *lp;
 
@@ -690,17 +690,6 @@ kfft_pass5(uint me,
     FFT4();
 
     // Save result
-    __global float4 *gp = (__global float4 *)(gr + (me << 2));
-    gp[0*64] = zr0;
-    gp[1*64] = zr1;
-    gp[2*64] = zr2;
-    gp[3*64] = zr3;
-
-    gp = (__global float4 *)(gi + (me << 2));
-    gp[0*64] = zi0;
-    gp[1*64] = zi1;
-    gp[2*64] = zi2;
-    gp[3*64] = zi3;
 }
 
 // Distance between first real element of successive 1K vectors
@@ -734,9 +723,6 @@ kfft(__global float *greal, __global float *gimag)
     kfft_pass4(me, lds);
     kfft_pass5(me, lds, gr, gi);
 
-    if (greal[gid] == 0x7bffffff)
-        greal[gid] = 1.0;
-    if (gimag[gid] == 0x7bffffff)
-        gimag[gid] = 1.0;
+    greal[gid] = gr[gid];
 }
 

@@ -84,14 +84,17 @@ static cl_device_id                     ComputeDeviceId;
 static cl_device_type                   ComputeDeviceType;
 static cl_mem                           ComputeInputOutputReal;
 static cl_mem                           ComputeInputOutputImaginary;
+static size_t                           MaxWorkGroupSize;
+static int                              WorkGroupSize[1];
+static int                              WorkGroupItems = 32;
 
 ////////////////////////////////////////////////////////////////////////////////
 
 static int Animated                     = 0;
 static int Update                       = 1;
 
-static int Width                        = 128;
-static int Height                       = 128;
+static int Width                        = 512;
+static int Height                       = 512;
 
 static float *DataReal                  = NULL;
 static float *DataImaginary             = NULL;
@@ -122,6 +125,11 @@ static float VertexPos[4][2]            = { { -1.0f, -1.0f },
 { -1.0f, +1.0f } };
 
 ////////////////////////////////////////////////////////////////////////////////
+static int 
+DivideUp(int a, int b) 
+{
+	return ((a % b) != 0) ? (a / b + 1) : (a / b);
+}
 
 static long
 GetCurrentTime()
@@ -391,6 +399,14 @@ CreateGLResouce()
 		return -1;
 	}
 
+	GLenum error_check_value = glGetError();
+	if (error_check_value != GL_NO_ERROR)
+	{
+		fprintf(stderr, "error: could not create GL resource: %s\n",
+				gluErrorString(error_check_value));
+		exit(1);
+	}
+
 	return 1;
 }
 
@@ -473,6 +489,9 @@ Recompute(void)
 
 		err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputOutputImaginary, 1, 0, 
 			DataElemCount * sizeof(float), DataImaginary, 0, 0, NULL);
+	{
+		
+	}
 		if (err != CL_SUCCESS)
 		{
 			printf("Failed to write buffer! %d\n", err);
@@ -491,7 +510,13 @@ Recompute(void)
 		size_t global[1];
 		size_t local[1];
 
-		global[0] = DataElemCount;
+		// global[0] = DataElemCount;
+		// local[0] = 64;
+
+		int size_x = WorkGroupSize[0];
+
+		global[0] = DivideUp(DataElemCount, size_x) * size_x; 
+
 		local[0] = 64;
 
 #if (DEBUG_INFO)
@@ -509,7 +534,7 @@ Recompute(void)
 
 		NDRangeCount++;
 
-#if DEBUG_INFO
+#if (DEBUG_INFO)
 
 		float *DataRealReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
 		float *DataImaginaryReadBack = (float *)calloc(1, sizeof(float) * DataElemCount);
@@ -554,7 +579,7 @@ Recompute(void)
 		}
 
 #else
-		// Explicitly copy data back to host and update VBOs
+		// Explicitly copy data back to host
 		err = clEnqueueReadBuffer( ComputeCommands, ComputeInputOutputReal, CL_TRUE, 0, DataElemCount * sizeof(float), DataReal, 0, NULL, NULL );      
 		if (err != CL_SUCCESS)
 		{
@@ -569,6 +594,7 @@ Recompute(void)
 			return EXIT_FAILURE;
 		}
 
+		// Data in host side, copy to VBOs
 		UpdateVBOs();
 #endif
 
@@ -587,6 +613,8 @@ CreateComputeResource(void)
 
 #if (USE_GL_ATTACHMENTS)
 
+	// CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
+	// Updating VBO or associated CL Buffer will have effect on both sides.
 	if(ComputeInputOutputReal)
 		clReleaseMemObject(ComputeInputOutputReal);
 	ComputeInputOutputReal = 0;
@@ -629,12 +657,13 @@ CreateComputeResource(void)
 
 #else
 
+	// Not sharing context, so just create CL buffers as normal
 	if(ComputeInputOutputReal)
 		clReleaseMemObject(ComputeInputOutputReal);
 	ComputeInputOutputReal = 0;
 
 	printf("Allocating compute input/output real part for FFT in device memory...\n");
-	ComputeInputOutputReal = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+	ComputeInputOutputReal = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
 			sizeof(float) * DataElemCount, 0, &err);
 	if (!ComputeInputOutputReal || err != CL_SUCCESS)
 	{
@@ -647,7 +676,7 @@ CreateComputeResource(void)
 	ComputeInputOutputImaginary = 0;
 
 	printf("Allocating compute input/output real part for FFT in device memory...\n");
-	ComputeInputOutputImaginary = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+	ComputeInputOutputImaginary = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
 			sizeof(float) * DataElemCount, 0, &err);
 	if (!ComputeInputOutputImaginary || err != CL_SUCCESS)
 	{
@@ -939,6 +968,7 @@ SetupComputeKernel(void)
 
 	// Build the program executable
 	//
+	// err = clBuildProgram(ComputeProgram, 0, NULL, "-x clc++", NULL, NULL);
 	err = clBuildProgram(ComputeProgram, 0, NULL, NULL, NULL, NULL);
 	if (err != CL_SUCCESS)
 	{
@@ -962,6 +992,25 @@ SetupComputeKernel(void)
 		return EXIT_FAILURE;
 	}
 
+    // Get the maximum work group size for executing the kernel on the device
+    //
+    err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxWorkGroupSize, NULL);
+    if (err != CL_SUCCESS)
+    {
+        printf("Error: Failed to retrieve kernel work group info! %d\n", err);
+        exit(1);
+    }
+
+#if (DEBUG_INFO)
+    printf("MaxWorkGroupSize: %d\n", MaxWorkGroupSize);
+    printf("WorkGroupItems: %d\n", WorkGroupItems);
+#endif
+
+    WorkGroupSize[0] = (MaxWorkGroupSize > 1) ? (MaxWorkGroupSize / WorkGroupItems) : MaxWorkGroupSize;
+    // WorkGroupSize[1] = MaxWorkGroupSize / WorkGroupSize[0];
+
+    printf(SEPARATOR);
+
 	return CL_SUCCESS;
 }
 
@@ -983,8 +1032,10 @@ Cleanup(void)
 	ComputeInputOutputImaginary = 0;
 	ComputeContext = 0;
 
-	free(DataReal);
-	free(DataImaginary);
+	if (DataReal)
+		free(DataReal);
+	if (DataImaginary)
+		free(DataImaginary);
 }
 
 static void
@@ -1042,17 +1093,17 @@ Initialize(int gpu)
 		exit (err);
 	}
 
-	err = SetupGLProgram();
-	if (err != 1)
-	{
-		printf ("Failed to setup OpenGL Shader! Error %d\n", err);
-		exit (err);
-	}
-
 	err = InitData();
 	if (err != 1)
 	{
 		printf ("Failed to Init FFT Data! Error %d\n", err);
+		exit (err);
+	}
+
+	err = SetupGLProgram();
+	if (err != 1)
+	{
+		printf ("Failed to setup OpenGL Shader! Error %d\n", err);
 		exit (err);
 	}
 
@@ -1062,8 +1113,6 @@ Initialize(int gpu)
 		printf ("Failed to create GL resource! Error %d\n", err);
 		exit (err);
 	}
-
-	glFinish();
 
 	err = SetupComputeKernel();
 	if (err != CL_SUCCESS)
@@ -1078,8 +1127,6 @@ Initialize(int gpu)
 		printf ("Failed to create compute result! Error %d\n", err);
 		exit (err);
 	}
-
-	clFlush(ComputeCommands);
 
 	return CL_SUCCESS;
 }
@@ -1140,7 +1187,7 @@ Display_(void)
 	uint64_t uiStartTime = GetCurrentTime();
 
 	glClearColor (0.0, 0.0, 0.0, 0.0);
-	glClear (GL_COLOR_BUFFER_BIT);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	if(Animated)
 	{
@@ -1155,7 +1202,33 @@ Display_(void)
 		exit(1);
 	}
 
-	glDrawArrays(GL_POINTS, 0, DataElemCount);
+	// glUseProgram(GLProgramID);
+
+	// if (VboRealID)
+	// {
+	// 	glBindBuffer(GL_ARRAY_BUFFER, VboRealID);
+	// 	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+	// 	glEnableVertexAttribArray(0);
+	// }
+	// else
+	// {
+	// 	printf("Invalid VboRealID\n");
+	// }
+
+	// if (VboImaginnaryID)
+	// {
+	// 	glBindBuffer(GL_ARRAY_BUFFER, VboImaginnaryID);
+	// 	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, 0);
+	// 	glEnableVertexAttribArray(0);
+	// }
+	// else
+	// {
+	// 	printf("Invalid VboRealID\n");
+	// }
+
+	// glFinish();
+
+	glDrawArrays(GL_POINTS, 0, DataElemCount / 4);
 	ReportInfo();
 
 	glFinish(); // for timing

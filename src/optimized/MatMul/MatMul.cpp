@@ -105,6 +105,10 @@ static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
 
+FILE *fp;// Output file
+
+////////////////////////////////////////////////////////////////////////////////
+
 static long
 GetCurrentTime()
 {
@@ -835,6 +839,7 @@ Cleanup(void)
 static void
 Shutdown(void)
 {
+	fclose(fp);
 	printf(SEPARATOR);
 	printf("Shutting down...\n");
 	Cleanup();
@@ -957,6 +962,7 @@ static void
 ReportStats(
 	uint64_t uiStartTime, uint64_t uiEndTime)
 {
+
 	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
 
 	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
@@ -969,7 +975,7 @@ ReportStats(
 			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
 		glutSetWindowTitle(StatsString);
-
+		fprintf(fp, "%s", StatsString);
 		FrameCount = 0;
 		TimeElapsed = 0;
 	}    
@@ -1083,6 +1089,8 @@ int main(int argc, char** argv)
 		else if (strstr(argv[i], "lds"))
 			Lds = 1;
 	}
+
+	fp = fopen("mm_res", "w+");
 
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);

@@ -150,6 +150,9 @@ static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
 
+FILE *fp;
+////////////////////////////////////////////////////////////////////////////////
+
 static int 
 DivideUp(int a, int b) 
 {
@@ -876,6 +879,7 @@ Cleanup(void)
 static void
 Shutdown(void)
 {
+    fclose(fp);
     printf(SEPARATOR);
     printf("Shutting down...\n");
     Cleanup();
@@ -1010,7 +1014,7 @@ ReportStats(
             fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
         
         glutSetWindowTitle(StatsString);
-
+        fprintf(fp, "%s\n", StatsString);
         FrameCount = 0;
         TimeElapsed = 0;
     }    
@@ -1179,6 +1183,7 @@ int main(int argc, char** argv)
             use_gpu = 1;
     }
 
+    fp = fopen("jf_res", "w+");
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize (Width, Height);

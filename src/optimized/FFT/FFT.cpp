@@ -123,6 +123,11 @@ static float VertexPos[4][2]            = { { -1.0f, -1.0f },
 
 ////////////////////////////////////////////////////////////////////////////////
 
+FILE *fp;
+
+////////////////////////////////////////////////////////////////////////////////
+
+
 static long
 GetCurrentTime()
 {
@@ -1127,7 +1132,7 @@ ReportStats(
 			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
 		glutSetWindowTitle(StatsString);
-
+		fprintf(fp, "%s\n", StatsString);
 		FrameCount = 0;
 		TimeElapsed = 0;
 	}    
@@ -1239,6 +1244,7 @@ int main(int argc, char** argv)
 			use_gpu = 1;
 	}
 
+	fp = fopen("fft_res", "w+");
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
 	glutInitWindowSize (Width, Height);

@@ -279,6 +279,39 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
             break;
         }
     }
+    cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
+                                      CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
+                                      CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
+                                    };
+    if (sampleArgs->deviceType.compare("gpu") == 0)
+    {
+        status = clGetGLContextInfoKHR( cpsGL,
+                                        CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
+                                        sizeof(cl_device_id),
+                                        &interopDeviceId,
+                                        NULL);
+        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
+
+        std::cout<<"Interop Device ID is "<<interopDeviceId<<std::endl;
+
+        // Create OpenCL context from device's id
+        context = clCreateContext(NULL,
+                                  1,
+                                  &interopDeviceId,
+                                  0,
+                                  0,
+                                  &status);
+        CHECK_OPENCL_ERROR(status, "clCreateContext failed.");
+    }
+    else
+    {
+        context = clCreateContextFromType(cpsGL,
+                                          CL_DEVICE_TYPE_CPU,
+                                          NULL,
+                                          NULL,
+                                          &status);
+        CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed!!");
+    }
     // OpenGL animation code goes here
     // GL init
     glewInit();
@@ -305,298 +338,6 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
 #endif
     return SDK_SUCCESS;
 }
-
-#ifdef _WIN32
-int
-GaussianNoiseGL::enableGLAndGetGLContext(HWND hWnd, HDC &hDC, HGLRC &hRC,
-        cl_platform_id platform, cl_context &context, cl_device_id &interopDevice)
-{
-    cl_int status;
-    BOOL ret = FALSE;
-    DISPLAY_DEVICE dispDevice;
-    DWORD deviceNum;
-    int  pfmt;
-    PIXELFORMATDESCRIPTOR  pfd;
-    pfd.nSize           = sizeof(PIXELFORMATDESCRIPTOR);
-    pfd.nVersion        = 1;
-    pfd.dwFlags         = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL  |
-                          PFD_DOUBLEBUFFER ;
-    pfd.iPixelType      = PFD_TYPE_RGBA;
-    pfd.cColorBits      = 24;
-    pfd.cRedBits        = 8;
-    pfd.cRedShift       = 0;
-    pfd.cGreenBits      = 8;
-    pfd.cGreenShift     = 0;
-    pfd.cBlueBits       = 8;
-    pfd.cBlueShift      = 0;
-    pfd.cAlphaBits      = 8;
-    pfd.cAlphaShift     = 0;
-    pfd.cAccumBits      = 0;
-    pfd.cAccumRedBits   = 0;
-    pfd.cAccumGreenBits = 0;
-    pfd.cAccumBlueBits  = 0;
-    pfd.cAccumAlphaBits = 0;
-    pfd.cDepthBits      = 24;
-    pfd.cStencilBits    = 8;
-    pfd.cAuxBuffers     = 0;
-    pfd.iLayerType      = PFD_MAIN_PLANE;
-    pfd.bReserved       = 0;
-    pfd.dwLayerMask     = 0;
-    pfd.dwVisibleMask   = 0;
-    pfd.dwDamageMask    = 0;
-
-    ZeroMemory(&pfd, sizeof(PIXELFORMATDESCRIPTOR));
-
-    dispDevice.cb = sizeof(DISPLAY_DEVICE);
-
-    DWORD connectedDisplays = 0;
-    DWORD displayDevices = 0;
-    int xCoordinate = 0;
-    int yCoordinate = 0;
-    int xCoordinate1 = 0;
-
-    for (deviceNum = 0; EnumDisplayDevices(NULL, deviceNum, &dispDevice, 0);
-            deviceNum++)
-    {
-        if (dispDevice.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)
-        {
-            continue;
-        }
-
-        if(!(dispDevice.StateFlags & DISPLAY_DEVICE_ACTIVE))
-        {
-            continue;
-        }
-
-        DEVMODE deviceMode;
-
-        // initialize the DEVMODE structure
-        ZeroMemory(&deviceMode, sizeof(deviceMode));
-        deviceMode.dmSize = sizeof(deviceMode);
-        deviceMode.dmDriverExtra = 0;
-
-
-        EnumDisplaySettings(dispDevice.DeviceName, ENUM_CURRENT_SETTINGS, &deviceMode);
-
-        xCoordinate = deviceMode.dmPosition.x;
-        yCoordinate = deviceMode.dmPosition.y;
-
-        WNDCLASS windowclass;
-
-        windowclass.style = CS_OWNDC;
-        windowclass.lpfnWndProc = WndProc;
-        windowclass.cbClsExtra = 0;
-        windowclass.cbWndExtra = 0;
-        windowclass.hInstance = NULL;
-        windowclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-        windowclass.hCursor = LoadCursor(NULL, IDC_ARROW);
-        windowclass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-        windowclass.lpszMenuName = NULL;
-        windowclass.lpszClassName = reinterpret_cast<LPCSTR>("GaussianNoiseGL");
-        RegisterClass(&windowclass);
-
-        gHwnd = CreateWindow(reinterpret_cast<LPCSTR>("GaussianNoiseGL"),
-                             reinterpret_cast<LPCSTR>("GaussianNoiseGL"),
-                             WS_CAPTION | WS_POPUPWINDOW,
-                             sampleArgs->isDeviceIdEnabled() ? xCoordinate1 : xCoordinate,
-                             yCoordinate,
-                             width,
-                             height,
-                             NULL,
-                             NULL,
-                             windowclass.hInstance,
-                             NULL);
-        hDC = GetDC(gHwnd);
-
-        pfmt = ChoosePixelFormat(hDC,
-                                 &pfd);
-        if(pfmt == 0)
-        {
-            std::cout << "Failed choosing the requested PixelFormat.\n";
-            return SDK_FAILURE;
-        }
-
-        ret = SetPixelFormat(hDC, pfmt, &pfd);
-
-        if(ret == FALSE)
-        {
-            std::cout<<"Failed to set the requested PixelFormat.\n";
-            return SDK_FAILURE;
-        }
-
-        hRC = wglCreateContext(hDC);
-        if(hRC == NULL)
-        {
-            std::cout<<"Failed to create a GL context"<<std::endl;
-            return SDK_FAILURE;
-        }
-
-        ret = wglMakeCurrent(hDC, hRC);
-        if(ret == FALSE)
-        {
-            std::cout<<"Failed to bind GL rendering context";
-            return SDK_FAILURE;
-        }
-        displayDevices++;
-
-        cl_context_properties properties[] =
-        {
-            CL_CONTEXT_PLATFORM, (cl_context_properties) platform,
-            CL_GL_CONTEXT_KHR,   (cl_context_properties) hRC,
-            CL_WGL_HDC_KHR,      (cl_context_properties) hDC,
-            0
-        };
-
-        if (!clGetGLContextInfoKHR)
-        {
-            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
-                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
-            if (!clGetGLContextInfoKHR)
-            {
-                std::cout<<"Failed to query proc address for clGetGLContextInfoKHR";
-                return SDK_FAILURE;
-            }
-        }
-
-        size_t deviceSize = 0;
-        status = clGetGLContextInfoKHR(properties,
-                                       CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
-                                       0,
-                                       NULL,
-                                       &deviceSize);
-        if(status != CL_SUCCESS)
-        {
-            std::cout<<"clGetGLContextInfoKHR failed!!"<<std::endl;
-            return SDK_FAILURE;
-        }
-
-        if (deviceSize == 0)
-        {
-            // no interopable CL device found, cleanup
-            wglMakeCurrent(NULL, NULL);
-            wglDeleteContext(hRC);
-            DeleteDC(hDC);
-            hDC = NULL;
-            hRC = NULL;
-            DestroyWindow(gHwnd);
-            // try the next display
-            continue;
-        }
-        else
-        {
-            if (sampleArgs->deviceId == 0)
-            {
-                ShowWindow(gHwnd, SW_SHOW);
-                //Found a winner
-                break;
-            }
-            else if (sampleArgs->deviceId != connectedDisplays)
-            {
-                connectedDisplays++;
-                wglMakeCurrent(NULL, NULL);
-                wglDeleteContext(hRC);
-                DeleteDC(hDC);
-                hDC = NULL;
-                hRC = NULL;
-                DestroyWindow(gHwnd);
-                if (xCoordinate >= 0)
-                {
-                    xCoordinate1 += deviceMode.dmPelsWidth;
-                    // try the next display
-                }
-                else
-                {
-                    xCoordinate1 -= deviceMode.dmPelsWidth;
-                }
-
-                continue;
-            }
-            else
-            {
-                ShowWindow(gHwnd, SW_SHOW);
-                //Found a winner
-                break;
-            }
-        }
-    }
-
-    if (!hRC || !hDC)
-    {
-        OPENCL_EXPECTED_ERROR("OpenGL interoperability is not feasible.");
-    }
-
-    cl_context_properties properties[] =
-    {
-        CL_CONTEXT_PLATFORM, (cl_context_properties) platform,
-        CL_GL_CONTEXT_KHR,   (cl_context_properties) hRC,
-        CL_WGL_HDC_KHR,      (cl_context_properties) hDC,
-        0
-    };
-
-    if (sampleArgs->deviceType.compare("gpu") == 0)
-    {
-        status = clGetGLContextInfoKHR( properties,
-                                        CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
-                                        sizeof(cl_device_id),
-                                        &interopDevice,
-                                        NULL);
-        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
-
-        // Create OpenCL context from device's id
-        context = clCreateContext(properties,
-                                  1,
-                                  &interopDevice,
-                                  0,
-                                  0,
-                                  &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContext failed!!");
-    }
-    else
-    {
-        context = clCreateContextFromType(
-                      properties,
-                      CL_DEVICE_TYPE_CPU,
-                      NULL,
-                      NULL,
-                      &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed!!");
-    }
-    // OpenGL animation code goes here
-    // GL init
-    glewInit();
-    if (! glewIsSupported("GL_VERSION_2_0 " "GL_ARB_pixel_buffer_object"))
-    {
-        std::cout
-                << "Support for necessary OpenGL extensions missing."
-                << std::endl;
-        return SDK_FAILURE;
-    }
-
-    //glEnable(GL_TEXTURE_2D);
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-    glDisable(GL_DEPTH_TEST);
-
-    glViewport(0, 0, width, height);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(
-        60.0,
-        (GLfloat)width / (GLfloat)height,
-        0.1,
-        10.0);
-    return SDK_SUCCESS;
-}
-
-void
-GaussianNoiseGL::disableGL(HWND hWnd, HDC hDC, HGLRC hRC)
-{
-    wglMakeCurrent( NULL, NULL );
-    wglDeleteContext( hRC );
-    ReleaseDC( hWnd, hDC );
-}
-
-#endif
 
 int
 GaussianNoiseGL::setupCL()
@@ -631,19 +372,6 @@ GaussianNoiseGL::setupCL()
     retValue = displayDevices(platform, dType);
     CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
 
-
-#ifdef _WIN32
-    int success = enableGLAndGetGLContext(gHwnd, gHdc, gGlCtx, platform, context,
-                                          interopDeviceId);
-    if(SDK_SUCCESS != success)
-    {
-        if(success == SDK_EXPECTED_FAILURE)
-        {
-            return SDK_EXPECTED_FAILURE;
-        }
-        return SDK_FAILURE;
-    }
-#else
     retValue = initializeGLAndGetCLContext(platform,
                                            context,
                                            interopDeviceId);
@@ -651,7 +379,6 @@ GaussianNoiseGL::setupCL()
     {
         return retValue;
     }
-#endif
 
     // getting device on which to run the sample
     // First, get the size of device list data
@@ -685,7 +412,6 @@ GaussianNoiseGL::setupCL()
     }
 
     // Create command queue
-
     cl_command_queue_properties prop = 0;
     commandQueue = clCreateCommandQueue(
                        context,
@@ -709,17 +435,13 @@ GaussianNoiseGL::setupCL()
                  GL_UNSIGNED_BYTE, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    /*
-     * Create clImage from GLTexture
-     */
-    outputImageBuffer = clCreateFromGLTexture(context,
-                        CL_MEM_WRITE_ONLY,
-                        GL_TEXTURE_2D,
-                        0,
-                        tex,
-                        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateFromGLTexture failed. (outputImageBuffer)");
-
+    // Create output image buffer
+    outputImageBuffer = clCreateBuffer(context, 
+                                CL_MEM_WRITE_ONLY, 
+                                width * height * pixelSize, 
+                                NULL, 
+                                &status);
+    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputImageBuffer)");
 
     /*
     * Create and initialize memory objects
@@ -760,8 +482,6 @@ GaussianNoiseGL::setupCL()
 
     status = waitForEventAndRelease(&writeEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(writeEvt) Failed");
-
-
 
     // create a CL program using the kernel source
     buildProgramData buildData;
@@ -881,8 +601,6 @@ GaussianNoiseGL::runCLKernels()
 {
     cl_int status;
 
-
-
     status = clSetKernelArg(
                  kernel,
                  0,
@@ -890,36 +608,19 @@ GaussianNoiseGL::runCLKernels()
                  &inputImageBuffer);
     CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputImageBuffer)");
 
-    //Acquire GL buffer
-    cl_event acquireEvt;
-    status = clEnqueueAcquireGLObjects(commandQueue,
-                                       1,
-                                       &outputImageBuffer,
-                                       0,
-                                       NULL,
-                                       &acquireEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueAcquireGLObjects failed.");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&acquireEvt);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(acquireEvt) Failed");
-
     status = clSetKernelArg(
                  kernel,
                  1,
                  sizeof(cl_mem),
                  &outputImageBuffer);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputImageBuffer)");
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (outputImageBuffer)");
 
     status = clSetKernelArg(
                  kernel,
                  2,
                  sizeof(int),
                  &verfactor);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputImageBuffer)");
-
+    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (verfactor)");
 
     size_t globalThreads[] = {width/2, height};
 
@@ -945,7 +646,6 @@ GaussianNoiseGL::runCLKernels()
     status = waitForEventAndRelease(&ndrEvt2);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(ndrEvt2) Failed");
 
-
     //read image to host buffer
     cl_event readEvt;
     size_t origin[3] = {0,0,0};
@@ -969,23 +669,6 @@ GaussianNoiseGL::runCLKernels()
 
     status = waitForEventAndRelease(&readEvt);
     CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(readEvt) Failed");
-
-
-    // Now OpenGL gets control of outputImageBuffer
-    cl_event releaseGLEvt;
-    status = clEnqueueReleaseGLObjects(commandQueue,
-                                       1,
-                                       &outputImageBuffer,
-                                       0,
-                                       NULL,
-                                       &releaseGLEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueReleaseGLObjects failed.");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&releaseGLEvt);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(releaseGLEvt) Failed");
 
     return SDK_SUCCESS;
 }
@@ -1131,8 +814,11 @@ GaussianNoiseGL::run()
             gaussianNoise->runCLKernels();
 
             // Bind texture
-
             glBindTexture(GL_TEXTURE_2D, tex);
+
+            if(outputImageData)
+                glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, width, height, 0, GL_RGBA,
+                             GL_UNSIGNED_BYTE, outputImageData);
 
             // Display image using texture
             glDisable(GL_DEPTH_TEST);

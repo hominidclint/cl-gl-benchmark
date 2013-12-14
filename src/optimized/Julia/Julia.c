@@ -101,7 +101,7 @@ static int                              WorkGroupItems = 32;
 static int Width                        = WIDTH;
 static int Height                       = HEIGHT;
 
-static int Animated                     = 0;
+static int Animated                     = 1;
 static int Update                       = 1;
 
 static float Epsilon                    = 0.003f;
@@ -1025,6 +1025,11 @@ Display_(void)
 {
     FrameCount++;
     uint64_t uiStartTime = GetCurrentTime();
+
+    if(FrameCount > 3)
+    {
+	    exit(0);
+    }
 
     glClearColor (0.0, 0.0, 0.0, 0.0);
     glClear (GL_COLOR_BUFFER_BIT);

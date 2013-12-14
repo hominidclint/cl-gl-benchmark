@@ -96,8 +96,8 @@ static int                              WorkGroupItems = 32;
 static int Animated                     = 0;
 static int Update                       = 1;
 
-static int Width                        = 512;
-static int Height                       = 512;
+static int Width                        = 128;
+static int Height                       = 128;
 
 static float *DataReal                  = NULL;
 static float *DataImaginary             = NULL;

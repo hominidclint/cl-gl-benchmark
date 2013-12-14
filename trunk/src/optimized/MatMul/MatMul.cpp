@@ -61,7 +61,7 @@ static int Height1                      = 512;
 static int Width                        = Width1;
 static int Height                       = Height0;
 
-static int Animated                     = 1;
+static int Animated                     = 0;
 static int Update                       = 1;
 static int Lds                          = 0;
 
@@ -988,10 +988,7 @@ Display_(void)
 	uint64_t uiStartTime = GetCurrentTime();
 
 
-	if(FrameCount > 3)
-	{
-		exit(0);
-	}
+
 	glClearColor (0.0, 0.0, 0.0, 0.0);
 	glClear (GL_COLOR_BUFFER_BIT);
 

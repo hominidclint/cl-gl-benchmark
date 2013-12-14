@@ -1144,10 +1144,7 @@ Display_(void)
 	FrameCount++;
 	uint64_t uiStartTime = GetCurrentTime();
 
-	if(FrameCount > 3)
-	{
-		exit(0);
-	}
+
 	glClearColor (0.0, 0.0, 0.0, 0.0);
 	glClear (GL_COLOR_BUFFER_BIT);
 

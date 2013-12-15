@@ -1176,10 +1176,10 @@ int main(int argc, char** argv)
         if(!argv[i])
             continue;
 
-        if(strstr(argv[i], "cpu"))
+        if(strstr(argv[i], "-cpu"))
             use_gpu = 0;        
 
-        else if(strstr(argv[i], "gpu"))
+        else if(strstr(argv[i], "-gpu"))
             use_gpu = 1;
     }
 

@@ -27,8 +27,8 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define USE_GL_ATTACHMENTS              (1)  // enable OpenGL attachments for Compute results
-#define DEBUG_INFO                      (0)     
+#define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
+#define DEBUG_INFO                      (0)
 #define COMPUTE_KERNEL_FILENAME         ("NBody_Kernels.cl")
 #define COMPUTE_KERNEL_MATMUL_NAME      ("nbody_sim")
 #define SEPARATOR                       ("----------------------------------------------------------------------\n")
@@ -278,7 +278,7 @@ InitData()
 {
 	// make sure DataParticleCount is multiple of group size
 	DataParticleCount = DataParticleCount < GroupSize ? GroupSize :
-		DataParticleCount;
+	DataParticleCount;
 	DataParticleCount = (DataParticleCount / GroupSize) * GroupSize;
 
 	DataBodyCount = DataParticleCount;
@@ -386,7 +386,7 @@ CreateGLResouce()
 	if (error_check_value != GL_NO_ERROR)
 	{
 		fprintf(stderr, "error: could not create VBO: %s\n",
-				gluErrorString(error_check_value));
+			gluErrorString(error_check_value));
 		exit(1);
 	}
 
@@ -401,8 +401,8 @@ Recompute(void)
 
 	int err = 0;
 
-    int currentBuffer = CurrentBuffer;
-    int nextBuffer = (CurrentBuffer+1)%2;
+	int currentBuffer = CurrentBuffer;
+	int nextBuffer = (CurrentBuffer+1)%2;
 
 	if(Animated || Update)
 	{
@@ -456,9 +456,9 @@ Recompute(void)
 
 #else
         // Not sharing context with OpenGL, needs to explicitly send data to GPU for the 1st frame
-        if (!NDRangeCount)
-        {
-        	printf("1st Frame! Let's send data to GPU!\n");
+		if (!NDRangeCount)
+		{
+			printf("1st Frame! Let's send data to GPU!\n");
 			err = clEnqueueWriteBuffer(ComputeCommands, ComputePosBuffer[currentBuffer], 1, 0, 
 				4 * sizeof(float) * DataBodyCount, DataInput, 0, 0, NULL);
 			if (err != CL_SUCCESS)
@@ -474,7 +474,7 @@ Recompute(void)
 				printf("Failed to write buffer! %d\n", err);
 				return EXIT_FAILURE;
 			}
-        }
+		}
 
 #endif
 		Update = 0;
@@ -527,7 +527,7 @@ Recompute(void)
 		}
 
 		for (int i = 0; i < DataBodyCount; ++i)
-			printf("Before NDRange %d - %d: org [%f %f %f %f] - org curr [%f %f %f %f] - org next [%f %f %f %f]\n", NDRangeCount, i, 
+			printf("After NDRange %d - %d: org [%f %f %f %f] - org curr [%f %f %f %f] - org next [%f %f %f %f]\n", NDRangeCount, i, 
 				DataInput[4 * i], DataInput[4 * i + 1], DataInput[4 * i + 2], DataInput[4 * i + 3],
 				DataCurPos[4 * i], DataCurPos[4 * i + 1], DataCurPos[4 * i + 2], DataCurPos[4 * i + 3],
 				DataNexPos[4 * i], DataNexPos[4 * i + 1], DataNexPos[4 * i + 2], DataNexPos[4 * i + 3]);
@@ -562,12 +562,6 @@ Recompute(void)
 			return EXIT_FAILURE;
 		}
 
-#if (DEBUG_INFO)
-
-		for (int i = 0; i < DataBodyCount; ++i)
-			printf("After NDRange %d - %d: org [%f %f %f %f]\n", NDRangeCount, i, 
-				DataInput[4 * i], DataInput[4 * i + 1], DataInput[4 * i + 2], DataInput[4 * i + 3]);
-#endif
         // Data in host side, copy to VBOs
 		UpdateVBO(nextBuffer, DataInput, nextBuffer);
 #endif
@@ -593,10 +587,10 @@ CreateComputeResource(void)
 
 #if (USE_GL_ATTACHMENTS)
 
-    // CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
-    // Updating VBO or associated CL Buffer will have effect on both sides.
+	// CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
+	// Updating VBO or associated CL Buffer affects both CL and GL.
 
-    // CL buffer Pos 0
+	// CL buffer Pos 0
 	if(ComputePosBuffer[0])
 		clReleaseMemObject(ComputePosBuffer[0]);
 	ComputePosBuffer[0] = 0;
@@ -617,16 +611,16 @@ CreateComputeResource(void)
 		return -1;
 	}
 
-	if(ComputePosBuffer[0])
-		clReleaseMemObject(ComputePosBuffer[0]);
-	ComputePosBuffer[0] = 0;
-
 	// CL buffer Pos 1
+	if(ComputePosBuffer[1])
+		clReleaseMemObject(ComputePosBuffer[1]);
+	ComputePosBuffer[1] = 0;
+
 	if (VboPosID[1])
 	{
 		printf("Allocating compute input/output real part for FFT in device memory...\n");
-		ComputePosBuffer[0] = clCreateFromGLBuffer(ComputeContext, CL_MEM_READ_WRITE, VboPosID[1], &err);
-		if (!ComputePosBuffer[0] || err != CL_SUCCESS)
+		ComputePosBuffer[1] = clCreateFromGLBuffer(ComputeContext, CL_MEM_READ_WRITE, VboPosID[1], &err);
+		if (!ComputePosBuffer[1] || err != CL_SUCCESS)
 		{
 			printf("Failed to create OpenGL VBO reference! %d\n", err);
 			return -1;
@@ -698,27 +692,27 @@ CreateComputeResource(void)
 	}
 
 	// Initialize the velocity buffer to zero
-    float* p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[0], CL_TRUE,
-                                           CL_MAP_WRITE
-                                           , 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
-    if (err != CL_SUCCESS)
-    {
-    	printf("Error mapping ComputeVelBuffer[0]\n");
-    	exit(-1);
-    }
-    memset(p, 0, 4 * sizeof(float) * DataBodyCount);
-    err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[0], p, 0, NULL,NULL);
+	float* p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[0], CL_TRUE,
+		CL_MAP_WRITE
+		, 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error mapping ComputeVelBuffer[0]\n");
+		exit(-1);
+	}
+	memset(p, 0, 4 * sizeof(float) * DataBodyCount);
+	err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[0], p, 0, NULL,NULL);
 
-    p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[1], CL_TRUE,
-                                           CL_MAP_WRITE
-                                           , 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
-    if (err != CL_SUCCESS)
-    {
-    	printf("Error mapping ComputeVelBuffer[1]\n");
-    	exit(-1);
-    }
-    memset(p, 0, 4 * sizeof(float) * DataBodyCount);
-    err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[1], p, 0, NULL,NULL);
+	p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[1], CL_TRUE,
+		CL_MAP_WRITE
+		, 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error mapping ComputeVelBuffer[1]\n");
+		exit(-1);
+	}
+	memset(p, 0, 4 * sizeof(float) * DataBodyCount);
+	err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[1], p, 0, NULL,NULL);
 
 	return CL_SUCCESS;
 }
@@ -955,9 +949,9 @@ SetupGLProgram()
 
 	printf("%d %d\n", VboPosLoc[0], VboPosLoc[1]);
 
-    UniformCurBufIdxLocation = glGetUniformLocation(GLProgramID, "curBufIdx");
-    if(UniformCurBufIdxLocation == 0xFFFFFFFF)
-    	return -1;
+	UniformCurBufIdxLocation = glGetUniformLocation(GLProgramID, "curBufIdx");
+	if(UniformCurBufIdxLocation == 0xFFFFFFFF)
+		return -1;
 
 	error_check_value = glGetError();
 	if (error_check_value != GL_NO_ERROR)
@@ -1056,11 +1050,11 @@ SetupComputeKernel(void)
 
 	// Setup several arguments that won't change
     // DataBodyCount
-    err = clSetKernelArg(
-                 ComputeKernel,
-                 2,
-                 sizeof(int),
-                 (void *)&DataBodyCount);
+	err = clSetKernelArg(
+		ComputeKernel,
+		2,
+		sizeof(int),
+		(void *)&DataBodyCount);
 	if (err != CL_SUCCESS)
 	{
 		printf("Error: Failed to set kernel arg 2: DataBodyCount! %d\n", err);
@@ -1068,11 +1062,11 @@ SetupComputeKernel(void)
 	}
 
     // time step
-    err = clSetKernelArg(
-                 ComputeKernel,
-                 3,
-                 sizeof(float),
-                 (void *)&delT);
+	err = clSetKernelArg(
+		ComputeKernel,
+		3,
+		sizeof(float),
+		(void *)&delT);
 	if (err != CL_SUCCESS)
 	{
 		printf("Error: Failed to set kernel arg 3: delT! %d\n", err);
@@ -1080,11 +1074,11 @@ SetupComputeKernel(void)
 	}
 
     // upward Pseudoprobability
-    err = clSetKernelArg(
-                 ComputeKernel,
-                 4,
-                 sizeof(float),
-                 (void *)&espSqr);
+	err = clSetKernelArg(
+		ComputeKernel,
+		4,
+		sizeof(float),
+		(void *)&espSqr);
 	if (err != CL_SUCCESS)
 	{
 		printf("Error: Failed to set kernel arg 4: espSqr! %d\n", err);
@@ -1282,12 +1276,12 @@ Display_(void)
 	glDrawArrays(GL_POINTS, 0, DataBodyCount);
 	ReportInfo();
 
-    glFinish(); // for timing
+	glFinish(); // for timing
 
-    uint64_t uiEndTime = GetCurrentTime();
-    ReportStats(uiStartTime, uiEndTime);
-    DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
-    glutSwapBuffers();
+	uint64_t uiEndTime = GetCurrentTime();
+	ReportStats(uiStartTime, uiEndTime);
+	DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+	glutSwapBuffers();
 }
 
 static void 

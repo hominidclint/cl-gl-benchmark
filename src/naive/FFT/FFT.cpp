@@ -432,7 +432,6 @@ Recompute(void)
 
 	if(Animated || Update)
 	{
-
 		glFinish();
 
 		// If use shared context, then data for ComputeInputOutput* is already in Vbo*

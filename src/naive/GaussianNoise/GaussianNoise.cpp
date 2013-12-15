@@ -305,7 +305,7 @@ GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
     }
     else
     {
-        context = clCreateContextFromType(cpsGL,
+        context = clCreateContextFromType(NULL,
                                           CL_DEVICE_TYPE_CPU,
                                           NULL,
                                           NULL,

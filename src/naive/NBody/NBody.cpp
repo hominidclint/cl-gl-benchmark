@@ -1,782 +1,1387 @@
-/**********************************************************************
-Copyright ©2013 Advanced Micro Devices, Inc. All rights reserved.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// OpenCL Kernel taken from AMDAPPSDK
+// Program Structure from APPLE QJulia
+// Remixed by Xiang
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-•   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-•   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
- other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
- DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-********************************************************************/
-
-
-#include "NBody.hpp"
-#include <GL/freeglut.h>
 #include <cmath>
-#include <malloc.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 
-int numBodies;      /**< No. of particles*/
-cl_float* pos;      /**< Output position */
-void* me;           /**< Pointing to NBody class */
-cl_bool display;
+#include <GL/glew.h>
+#include <GL/glx.h>
+#include <GL/freeglut.h>
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
 
-float
-NBody::random(float randMax, float randMin)
+////////////////////////////////////////////////////////////////////////////////
+
+#define USE_GL_ATTACHMENTS              (1)  // enable OpenGL attachments for Compute results
+#define DEBUG_INFO                      (0)     
+#define COMPUTE_KERNEL_FILENAME         ("NBody_Kernels.cl")
+#define COMPUTE_KERNEL_MATMUL_NAME      ("nbody_sim")
+#define SEPARATOR                       ("----------------------------------------------------------------------\n")
+
+////////////////////////////////////////////////////////////////////////////////
+
+static GLuint                            VaoID;
+static GLuint                            VboPosID[2];
+static GLuint                            VboPosLoc[2];
+static GLuint                            UniformCurBufIdxLocation;
+static GLuint                            VertexShaderID;
+static GLuint                            FragShaderID;
+static GLuint                            GLProgramID;
+
+////////////////////////////////////////////////////////////////////////////////
+
+FILE *fp;
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+const char *VertexShaderSource = 
+"#version 430\n"
+
+"layout(location=0) in vec4 pos0;\n"
+"layout(location=1) in vec4 pos1;\n"
+
+"out vec4 ex_Color;\n"
+
+"uniform int curBufIdx;\n"
+
+"void main(void)\n"
+"{\n"
+"   if ( curBufIdx == 0 )\n"
+"     gl_Position = vec4((pos0.x - 25) / 40, (pos0.y - 30) / 40 , 1.0, 1.0);\n"
+"   else\n"
+"     gl_Position = vec4((pos1.x - 25) / 40, (pos1.y - 30) / 40, 1.0, 1.0);\n"
+"   ex_Color = vec4(1.0, 1.0, 1.0, 1.0);\n"
+"}\n";
+
+const char *FragShaderSource = 
+"#version 430\n"
+
+"in vec4 ex_Color;\n"
+"out vec4 out_Color;\n"
+
+"void main(void)\n"
+"{\n"
+"   out_Color = ex_Color;\n"
+"}\n";
+
+////////////////////////////////////////////////////////////////////////////////
+
+static cl_context                       ComputeContext;
+static cl_command_queue                 ComputeCommands;
+static cl_kernel                        ComputeKernel;
+static cl_program                       ComputeProgram;
+static cl_device_id                     ComputeDeviceId;
+static cl_device_type                   ComputeDeviceType;
+static cl_mem                           ComputePosBuffer[2];
+static cl_mem                           ComputeVelBuffer[2];
+static size_t                           MaxWorkGroupSize;
+static int                              WorkGroupSize[1];
+static int                              WorkGroupItems = 32;
+static int                              CurrentBuffer = 0;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int Animated                     = 0;
+static int Update                       = 1;
+
+static int WindowWidth                  = 512;
+static int WindowHeight                 = 512;
+
+static float *DataInput                 = NULL;
+
+static int DataParticleCount            = 1024;
+static int DataBodyCount                = 1024;
+static float delT                       = 0.005f;
+static float espSqr                     = 500.0f;
+
+static int GroupSize                    = 128;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static double TimeElapsed               = 0;
+static int FrameCount                   = 0;
+static int NDRangeCount                 = 0;
+static uint ReportStatsInterval         = 30;
+
+static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
+static float HighlightTextColor[4]      = { 0.9f, 0.9f, 0.9f, 1.0f };
+static uint TextOffset[2]               = { 25, 25 };
+
+static uint ShowStats                   = 1;
+static char StatsString[512]            = "\0";
+static uint ShowInfo                    = 1;
+static char InfoString[512]             = "\0";
+
+// static float VertexPos[4][2]            = { { -1.0f, -1.0f },
+// { +1.0f, -1.0f },
+// { +1.0f, +1.0f },
+// { -1.0f, +1.0f } };
+
+////////////////////////////////////////////////////////////////////////////////
+static long
+GetCurrentTime()
 {
-    float result;
-    result =(float)rand() / (float)RAND_MAX;
+	struct timeval tv;
 
-    return ((1.0f - result) * randMin + result *randMax);
+	gettimeofday(&tv, NULL);
+
+	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
 }
 
-int
-NBody::setupNBody()
+static double 
+SubtractTime( long uiEndTime, long uiStartTime )
 {
-    // make sure numParticles is multiple of group size
-    numParticles = (cl_int)(((size_t)numParticles < groupSize) ? groupSize :
-                            numParticles);
-    numParticles = (cl_int)((numParticles / groupSize) * groupSize);
+	return uiEndTime - uiStartTime;
+}
 
-    numBodies = numParticles;
+////////////////////////////////////////////////////////////////////////////////
 
-    initPos = (cl_float*)malloc(numBodies * sizeof(cl_float4));
-    CHECK_ALLOCATION(initPos, "Failed to allocate host memory. (initPos)");
+static int LoadTextFromFile(
+	const char *file_name, char **result_string, size_t *string_len)
+{
+	int fd;
+	unsigned file_len;
+	struct stat file_status;
+	int ret;
 
-    // initialization of inputs
-    for(int i = 0; i < numBodies; ++i)
-    {
-        int index = 4 * i;
+	*string_len = 0;
+	fd = open(file_name, O_RDONLY);
+	if (fd == -1)
+	{
+		printf("Error opening file %s\n", file_name);
+		return -1;
+	}
+	ret = fstat(fd, &file_status);
+	if (ret)
+	{
+		printf("Error reading status for file %s\n", file_name);
+		return -1;
+	}
+	file_len = file_status.st_size;
 
-        // First 3 values are position in x,y and z direction
-        for(int j = 0; j < 3; ++j)
+	*result_string = (char*)calloc(file_len + 1, sizeof(char));
+	ret = read(fd, *result_string, file_len);
+	if (!ret)
+	{
+		printf("Error reading from file %s\n", file_name);
+		return -1;
+	}
+
+	close(fd);
+
+	*string_len = file_len;
+	return 0;
+}
+
+static void DrawString(float x, float y, float color[4], char *buffer)
+{
+	unsigned int uiLen, i;
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+
+	glRasterPos2f(x, y);
+	glColor3f(color[0], color[1], color[2]);
+	uiLen = (unsigned int) strlen(buffer);
+	for (i = 0; i < uiLen; i++)
+	{
+		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, buffer[i]);
+	}
+	glPopAttrib();
+}
+
+static void DrawText(float x, float y, int light, const char *format, ...)
+{
+	va_list args;
+	char buffer[256];
+	GLint iVP[4];
+	GLint iMatrixMode;
+
+	va_start(args, format);
+	vsprintf(buffer, format, args);
+	va_end(args);
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+	glDisable(GL_BLEND);
+
+	glGetIntegerv(GL_VIEWPORT, iVP);
+	glViewport(0, 0, WindowWidth, WindowHeight);
+	glGetIntegerv(GL_MATRIX_MODE, &iMatrixMode);
+
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glScalef(2.0f / WindowWidth, -2.0f / WindowHeight, 1.0f);
+	glTranslatef(-WindowWidth / 2.0f, -WindowHeight / 2.0f, 0.0f);
+
+	if(light)
+	{
+		glColor4fv(ShadowTextColor);
+		DrawString(x-0, y-0, ShadowTextColor, buffer);
+
+		glColor4fv(HighlightTextColor);
+		DrawString(x-2, y-2, HighlightTextColor, buffer);
+	}
+	else
+	{
+		glColor4fv(HighlightTextColor);
+		DrawString(x-0, y-0, HighlightTextColor, buffer);
+
+		glColor4fv(ShadowTextColor);
+		DrawString(x-2, y-2, ShadowTextColor, buffer);   
+	}
+
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+
+	glPopMatrix();
+	glMatrixMode(iMatrixMode);
+
+	glPopAttrib();
+	glViewport(iVP[0], iVP[1], iVP[2], iVP[3]);
+}
+
+
+static float
+RandomFloat(float randMax, float randMin)
+{
+	float result;
+	result =(float)rand() / (float)RAND_MAX;
+
+	return ((1.0f - result) * randMin + result *randMax);
+}
+
+static int 
+InitData()
+{
+	// make sure DataParticleCount is multiple of group size
+	DataParticleCount = DataParticleCount < GroupSize ? GroupSize :
+		DataParticleCount;
+	DataParticleCount = (DataParticleCount / GroupSize) * GroupSize;
+
+	DataBodyCount = DataParticleCount;
+
+	if (DataInput)
+		free(DataInput);
+	DataInput = (float *)calloc(1, DataBodyCount * sizeof(cl_float4));
+
+	// initialization of inputs
+	for(int i = 0; i < DataBodyCount; ++i)
+	{
+		int index = 4 * i;
+
+		// First 3 values are position in x,y and z direction
+		for(int j = 0; j < 3; ++j)
+		{
+			DataInput[index + j] = RandomFloat(3, 50);
+		}
+
+		// Mass value
+		DataInput[index + 3] = RandomFloat(1, 1000);
+	}
+
+	return 1;
+}
+
+
+#if USE_GL_ATTACHMENTS
+#else
+static int
+UpdateVBO(int index, void *data, int gl_attrib_array_index)
+{
+	if (VboPosID[index] && data)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, VboPosID[index]);
+		glBufferData(GL_ARRAY_BUFFER, 4 * sizeof(float) * DataBodyCount, data, GL_STATIC_DRAW);
+		glVertexAttribPointer(gl_attrib_array_index, 4, GL_FLOAT, GL_FALSE, 0, 0);
+		glEnableVertexAttribArray(gl_attrib_array_index);
+	}
+	else
+	{
+		printf("Invalid VboPosID[%d]\n", index);
+		return -1;
+	}
+
+	return 1;
+}
+#endif
+
+static int
+CreateGLResouce()
+{
+	GLint bsize;
+
+	// VAO
+	glGenVertexArrays(1, &VaoID);
+	glBindVertexArray(VaoID);
+	if (!VaoID)
+	{
+		printf("VAO generating failed!\n");
+		return -1;
+	}
+
+	// VBOPOS0
+	if (VboPosID[0])
+		glDeleteBuffers(1, &VboPosID[0]);
+	glGenBuffers(1, &VboPosID[0]);
+	if (!VboPosID[0])
+	{
+		printf("VBO VboPosID[0] generation failed\n");
+		return -1;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, VboPosID[0]);
+	glBufferData(GL_ARRAY_BUFFER, 4 * sizeof(float) * DataBodyCount, DataInput, GL_STATIC_DRAW);
+	glVertexAttribPointer(VboPosLoc[0], 4, GL_FLOAT, GL_FALSE, 0, 0);
+	glEnableVertexAttribArray(VboPosLoc[0]);
+
+	// recheck the size of the created buffer to make sure its what we requested
+	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize); 
+	if ((GLuint)bsize != 4 * sizeof(float) * DataBodyCount) {
+		printf("Vertex Buffer object (%d) has incorrect size (%d).\n", VboPosID[0], bsize);
+	}
+
+	// VBOPOS1
+	if (VboPosID[1])
+		glDeleteBuffers(1, &VboPosID[1]);
+	glGenBuffers(1, &VboPosID[1]);
+	if (!VboPosID[1])
+	{
+		printf("VBO VboPosID[1] generation failed\n");
+		return -1;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, VboPosID[1]);
+	glBufferData(GL_ARRAY_BUFFER, 4 * sizeof(float) * DataBodyCount, DataInput, GL_STATIC_DRAW);
+	glVertexAttribPointer(VboPosLoc[1], 4, GL_FLOAT, GL_FALSE, 0, 0);
+	glEnableVertexAttribArray(VboPosLoc[1]);
+
+	// recheck the size of the created buffer to make sure its what we requested
+	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize); 
+	if ((GLuint)bsize != 4 * sizeof(float) * DataBodyCount) {
+		printf("Vertex Buffer object (%d) has incorrect size (%d).\n", VboPosID[1], bsize);
+	}
+
+	GLenum error_check_value = glGetError();
+	if (error_check_value != GL_NO_ERROR)
+	{
+		fprintf(stderr, "error: could not create VBO: %s\n",
+				gluErrorString(error_check_value));
+		exit(1);
+	}
+
+	return 1;
+}
+
+static int
+Recompute(void)
+{
+	if(!ComputeKernel)
+		return CL_SUCCESS;
+
+	int err = 0;
+
+    int currentBuffer = CurrentBuffer;
+    int nextBuffer = (CurrentBuffer+1)%2;
+
+	if(Animated || Update)
+	{
+
+		glFinish();
+
+        // If use shared context, then data should be already in GL VBOs even for the 1st frame
+#if (USE_GL_ATTACHMENTS)
+
+		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputePosBuffer[currentBuffer], 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to acquire GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputePosBuffer[nextBuffer], 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to acquire GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+#if (DEBUG_INFO)
+		float *DataCurPos = (float *)calloc(1, 4 * sizeof(float) * DataBodyCount);
+		float *DataNexPos = (float *)calloc(1, 4 * sizeof(float) * DataBodyCount);
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputePosBuffer[currentBuffer], CL_TRUE, 0, 4 * sizeof(float) * DataBodyCount, DataCurPos, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputePosBuffer[nextBuffer], CL_TRUE, 0, 4 * sizeof(float) * DataBodyCount, DataNexPos, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		for (int i = 0; i < DataBodyCount; ++i)
+			printf("Before NDRange %d - %d: org [%f %f %f %f] - org curr [%f %f %f %f] - org next [%f %f %f %f]\n", NDRangeCount, i, 
+				DataInput[4 * i], DataInput[4 * i + 1], DataInput[4 * i + 2], DataInput[4 * i + 3],
+				DataCurPos[4 * i], DataCurPos[4 * i + 1], DataCurPos[4 * i + 2], DataCurPos[4 * i + 3],
+				DataNexPos[4 * i], DataNexPos[4 * i + 1], DataNexPos[4 * i + 2], DataNexPos[4 * i + 3]);
+
+		free(DataCurPos);
+		free(DataNexPos);
+#endif
+
+#else
+        // Not sharing context with OpenGL, needs to explicitly send data to GPU for the 1st frame
+        if (!NDRangeCount)
         {
-            initPos[index + j] = random(3, 50);
+        	printf("1st Frame! Let's send data to GPU!\n");
+			err = clEnqueueWriteBuffer(ComputeCommands, ComputePosBuffer[currentBuffer], 1, 0, 
+				4 * sizeof(float) * DataBodyCount, DataInput, 0, 0, NULL);
+			if (err != CL_SUCCESS)
+			{
+				printf("Failed to write buffer! %d\n", err);
+				return EXIT_FAILURE;
+			}
+
+			err = clEnqueueWriteBuffer(ComputeCommands, ComputePosBuffer[nextBuffer], 1, 0, 
+				4 * sizeof(float) * DataBodyCount, DataInput, 0, 0, NULL);
+			if (err != CL_SUCCESS)
+			{
+				printf("Failed to write buffer! %d\n", err);
+				return EXIT_FAILURE;
+			}
         }
 
-        // Mass value
-        initPos[index + 3] = random(1, 1000);
-    }
-    return SDK_SUCCESS;
+#endif
+		Update = 0;
+		err = CL_SUCCESS;
+		err |= clSetKernelArg(ComputeKernel, 0, sizeof(cl_mem), &ComputePosBuffer[currentBuffer]);
+		err |= clSetKernelArg(ComputeKernel, 1, sizeof(cl_mem), &ComputeVelBuffer[currentBuffer]);
+		err |= clSetKernelArg(ComputeKernel, 5, sizeof(cl_mem), &ComputePosBuffer[nextBuffer]);
+		err |= clSetKernelArg(ComputeKernel, 6, sizeof(cl_mem), &ComputeVelBuffer[nextBuffer]);
+		if (err)
+			return -10;
+
+		size_t global[1];
+		size_t local[1];
+
+		global[0] = DataBodyCount;
+		local[0] = GroupSize;
+
+#if (DEBUG_INFO)
+		if(FrameCount <= 1)
+			printf("Global[%4d] Local[%4d]\n", 
+				(int)global[0], (int)local[0]);
+#endif
+
+		err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 1, NULL, global, local, 0, NULL, NULL);
+		if (err)
+		{
+			printf("Failed to enqueue kernel! %d\n", err);
+			return err;
+		}
+
+		NDRangeCount++;
+
+#if (DEBUG_INFO)
+
+		float *DataCurPos = (float *)calloc(1, 4 * sizeof(float) * DataBodyCount);
+		float *DataNexPos = (float *)calloc(1, 4 * sizeof(float) * DataBodyCount);
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputePosBuffer[currentBuffer], CL_TRUE, 0, 4 * sizeof(float) * DataBodyCount, DataCurPos, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueReadBuffer( ComputeCommands, ComputePosBuffer[nextBuffer], CL_TRUE, 0, 4 * sizeof(float) * DataBodyCount, DataNexPos, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		for (int i = 0; i < DataBodyCount; ++i)
+			printf("Before NDRange %d - %d: org [%f %f %f %f] - org curr [%f %f %f %f] - org next [%f %f %f %f]\n", NDRangeCount, i, 
+				DataInput[4 * i], DataInput[4 * i + 1], DataInput[4 * i + 2], DataInput[4 * i + 3],
+				DataCurPos[4 * i], DataCurPos[4 * i + 1], DataCurPos[4 * i + 2], DataCurPos[4 * i + 3],
+				DataNexPos[4 * i], DataNexPos[4 * i + 1], DataNexPos[4 * i + 2], DataNexPos[4 * i + 3]);
+		
+		free(DataCurPos);
+		free(DataNexPos);
+#endif
+
+#if (USE_GL_ATTACHMENTS)
+
+        // Release control and the data is already in VBOs
+		err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputePosBuffer[currentBuffer], 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to release GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+		err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputePosBuffer[nextBuffer], 0, 0, 0);
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to release GL object! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+#else
+        // Explicitly copy data back to host
+		err = clEnqueueReadBuffer( ComputeCommands, ComputePosBuffer[nextBuffer], CL_TRUE, 0, DataParticleCount * sizeof(float), DataInput, 0, NULL, NULL );      
+		if (err != CL_SUCCESS)
+		{
+			printf("Failed to read buffer! %d\n", err);
+			return EXIT_FAILURE;
+		}
+
+#if (DEBUG_INFO)
+
+		for (int i = 0; i < DataBodyCount; ++i)
+			printf("After NDRange %d - %d: org [%f %f %f %f]\n", NDRangeCount, i, 
+				DataInput[4 * i], DataInput[4 * i + 1], DataInput[4 * i + 2], DataInput[4 * i + 3]);
+#endif
+        // Data in host side, copy to VBOs
+		UpdateVBO(nextBuffer, DataInput, nextBuffer);
+#endif
+
+		clFinish(ComputeCommands);
+	}
+
+	// Notify GL side which attribute index is using
+	glUniform1i(UniformCurBufIdxLocation, nextBuffer);
+
+	// Switch buffers
+	CurrentBuffer = nextBuffer;
+
+	return CL_SUCCESS;
 }
 
-int
-NBody::genBinaryImage()
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+CreateComputeResource(void)
 {
-    bifData binaryData;
-    binaryData.kernelName = std::string("NBody_Kernels.cl");
-    binaryData.flagsStr = std::string("");
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
+	int err = 0;
 
-    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
-    int status = generateBinaryImage(binaryData);
-    return status;
-}
+#if (USE_GL_ATTACHMENTS)
 
+    // CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
+    // Updating VBO or associated CL Buffer will have effect on both sides.
 
-int
-NBody::setupCL()
-{
-    cl_int status = CL_SUCCESS;
+    // CL buffer Pos 0
+	if(ComputePosBuffer[0])
+		clReleaseMemObject(ComputePosBuffer[0]);
+	ComputePosBuffer[0] = 0;
 
-    cl_device_type dType;
+	if (VboPosID[0])
+	{
+		printf("Allocating compute input/output real part for FFT in device memory...\n");
+		ComputePosBuffer[0] = clCreateFromGLBuffer(ComputeContext, CL_MEM_READ_WRITE, VboPosID[0], &err);
+		if (!ComputePosBuffer[0] || err != CL_SUCCESS)
+		{
+			printf("Failed to create OpenGL VBO reference! %d\n", err);
+			return -1;
+		}
+	}
+	else
+	{
+		printf("VboPosID[0] not valid!\n");
+		return -1;
+	}
 
-    if(sampleArgs->deviceType.compare("cpu") == 0)
-    {
-        dType = CL_DEVICE_TYPE_CPU;
-    }
-    else //deviceType = "gpu"
-    {
-        dType = CL_DEVICE_TYPE_GPU;
-        if(sampleArgs->isThereGPU() == false)
-        {
-            std::cout << "GPU not found. Falling back to CPU device" << std::endl;
-            dType = CL_DEVICE_TYPE_CPU;
-        }
-    }
+	if(ComputePosBuffer[0])
+		clReleaseMemObject(ComputePosBuffer[0]);
+	ComputePosBuffer[0] = 0;
 
-    /*
-     * Have a look at the available platforms and pick either
-     * the AMD one if available or a reasonable default.
-     */
-    cl_platform_id platform = NULL;
-    int retValue = getPlatform(platform, sampleArgs->platformId,
-                               sampleArgs->isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
+	// CL buffer Pos 1
+	if (VboPosID[1])
+	{
+		printf("Allocating compute input/output real part for FFT in device memory...\n");
+		ComputePosBuffer[0] = clCreateFromGLBuffer(ComputeContext, CL_MEM_READ_WRITE, VboPosID[1], &err);
+		if (!ComputePosBuffer[0] || err != CL_SUCCESS)
+		{
+			printf("Failed to create OpenGL VBO reference! %d\n", err);
+			return -1;
+		}
+	}
+	else
+	{
+		printf("VboPosID[1] not valid!\n");
+		return -1;
+	}
 
-    // Display available devices.
-    retValue = displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
+#else
 
+    // Not sharing context, so just create CL buffers as normal
+	if(ComputePosBuffer[0])
+		clReleaseMemObject(ComputePosBuffer[0]);
+	ComputePosBuffer[0] = 0;
 
-    /*
-     * If we could find our platform, use it. Otherwise use just available platform.
-     */
-    cl_context_properties cps[3] =
-    {
-        CL_CONTEXT_PLATFORM,
-        (cl_context_properties)platform,
-        0
-    };
+	printf("Allocating compute buffer 0 for NBody in device memory...\n");
+	ComputePosBuffer[0] = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
+		4 * sizeof(float) * DataBodyCount, 0, &err);
+	if (!ComputePosBuffer[0] || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL VBO reference! %d\n", err);
+		return -1;
+	}
 
-    context = clCreateContextFromType(
-                  cps,
-                  dType,
-                  NULL,
-                  NULL,
-                  &status);
-    CHECK_OPENCL_ERROR( status, "clCreateContextFromType failed.");
+	if(ComputePosBuffer[1])
+		clReleaseMemObject(ComputePosBuffer[1]);
+	ComputePosBuffer[1] = 0;
 
-    // getting device on which to run the sample
-    status = getDevices(context, &devices, sampleArgs->deviceId,
-                        sampleArgs->isDeviceIdEnabled());
-    CHECK_ERROR(status, SDK_SUCCESS, "getDevices() failed");
+	printf("Allocating compute buffer 1 for NBody in device memory...\n");
+	ComputePosBuffer[1] = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
+		4 * sizeof(float) * DataBodyCount, 0, &err);
+	if (!ComputePosBuffer[1] || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL VBO reference! %d\n", err);
+		return -1;
+	}
 
-    {
-        // The block is to move the declaration of prop closer to its use
-        cl_command_queue_properties prop = 0;
-        commandQueue = clCreateCommandQueue(
-                           context,
-                           devices[sampleArgs->deviceId],
-                           prop,
-                           &status);
-        CHECK_OPENCL_ERROR( status, "clCreateCommandQueue failed.");
-    }
+#endif
 
-    //Set device info of given cl_device_id
-    retValue = deviceInfo.setDeviceInfo(devices[sampleArgs->deviceId]);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "SDKDeviceInfo::setDeviceInfo() failed");
+	// Velocity buffer 0
+	if(ComputeVelBuffer[0])
+		clReleaseMemObject(ComputeVelBuffer[0]);
+	ComputeVelBuffer[0] = 0;
 
-    /*
-    * Create and initialize memory objects
-    */
-    size_t bufferSize = numBodies * sizeof(cl_float4);
-    for (int i = 0; i < 2; i++)
-    {
-        particlePos[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, 0,
-                                        &status);
-        CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (particlePos)");
-        particleVel[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, bufferSize, 0,
-                                        &status);
-        CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (particleVel)");
-    }
+	printf("Allocating compute velocity buffer 0 for NBody in device memory...\n");
+	ComputeVelBuffer[0] = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
+		4 * sizeof(float) * DataBodyCount, 0, &err);
+	if (!ComputeVelBuffer[0] || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL VBO reference! %d\n", err);
+		return -1;
+	}
 
-    // Initialize position buffer
-    status = clEnqueueWriteBuffer(commandQueue,particlePos[0],CL_TRUE,0,bufferSize,
-                                  initPos,0,0,NULL);
-    CHECK_OPENCL_ERROR(status, "clEnqueueWriteBuffer failed. ");
+	// Velocity buffer 1
+	if(ComputeVelBuffer[1])
+		clReleaseMemObject(ComputeVelBuffer[1]);
+	ComputeVelBuffer[1] = 0;
 
-    // Initialize the velocity buffer to zero
-    float* p = (float*) clEnqueueMapBuffer(commandQueue, particleVel[0], CL_TRUE,
+	printf("Allocating compute velocity buffer 0 for NBody in device memory...\n");
+	ComputeVelBuffer[1] = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE,
+		4 * sizeof(float) * DataBodyCount, 0, &err);
+	if (!ComputeVelBuffer[1] || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL VBO reference! %d\n", err);
+		return -1;
+	}
+
+	// Initialize the velocity buffer to zero
+    float* p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[0], CL_TRUE,
                                            CL_MAP_WRITE
-                                           , 0, bufferSize, 0, NULL, NULL, &status);
-    CHECK_OPENCL_ERROR(status, "clEnqueueMapBuffer failed. ");
-    memset(p, 0, bufferSize);
-    status = clEnqueueUnmapMemObject(commandQueue, particleVel[0], p, 0, NULL,
-                                     NULL);
-    CHECK_OPENCL_ERROR(status, "clEnqueueUnmapMemObject failed. ");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed. ");
-
-    // create a CL program using the kernel source
-    buildProgramData buildData;
-    buildData.kernelName = std::string("NBody_Kernels.cl");
-    buildData.devices = devices;
-    buildData.deviceId = sampleArgs->deviceId;
-    buildData.flagsStr = std::string("");
-    if(sampleArgs->isLoadBinaryEnabled())
+                                           , 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
+    if (err != CL_SUCCESS)
     {
-        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
+    	printf("Error mapping ComputeVelBuffer[0]\n");
+    	exit(-1);
     }
+    memset(p, 0, 4 * sizeof(float) * DataBodyCount);
+    err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[0], p, 0, NULL,NULL);
 
-    if(sampleArgs->isComplierFlagsSpecified())
+    p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[1], CL_TRUE,
+                                           CL_MAP_WRITE
+                                           , 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
+    if (err != CL_SUCCESS)
     {
-        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
+    	printf("Error mapping ComputeVelBuffer[1]\n");
+    	exit(-1);
     }
+    memset(p, 0, 4 * sizeof(float) * DataBodyCount);
+    err = clEnqueueUnmapMemObject(ComputeCommands, ComputeVelBuffer[1], p, 0, NULL,NULL);
 
-    retValue = buildOpenCLProgram(program, context, buildData);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
-
-    // get a kernel object handle for a kernel with the given name
-    kernel = clCreateKernel(program,"nbody_sim",&status);
-    CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
-
-    return SDK_SUCCESS;
+	return CL_SUCCESS;
 }
 
-
-int
-NBody::setupCLKernels()
+static int 
+SetupComputeDevices(int gpu)
 {
-    cl_int status;
+	int err;
+	size_t returned_size;
+	ComputeDeviceType = gpu ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
 
-    // Set appropriate arguments to the kernel
+#if (USE_GL_ATTACHMENTS)
 
-    // numBodies
-    status = clSetKernelArg(
-                 kernel,
+	printf(SEPARATOR);
+	printf("Using active OpenGL context...\n");
+
+    // Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Create a context  
+	cl_context_properties properties[] =
+	{
+		CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
+		CL_GLX_DISPLAY_KHR, (cl_context_properties)glXGetCurrentDisplay(),
+		CL_CONTEXT_PLATFORM, (cl_context_properties)(platform_id),
+		0
+	};
+
+    // Create a context from a CGL share group
+    //
+	ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
+#else
+
+    // Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Create a context containing the compute device(s)
+    //
+	ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
+#endif
+
+	unsigned int device_count;
+	cl_device_id device_ids[16];
+
+	err = clGetContextInfo(ComputeContext, CL_CONTEXT_DEVICES, sizeof(device_ids), device_ids, &returned_size);
+	if(err)
+	{
+		printf("Error: Failed to retrieve compute devices for context!\n");
+		return EXIT_FAILURE;
+	}
+
+	device_count = returned_size / sizeof(cl_device_id);
+
+	unsigned int i = 0;
+	int device_found = 0;
+	cl_device_type device_type; 
+	for(i = 0; i < device_count; i++) 
+	{
+		clGetDeviceInfo(device_ids[i], CL_DEVICE_TYPE, sizeof(cl_device_type), &device_type, NULL);
+		if(device_type == ComputeDeviceType) 
+		{
+			ComputeDeviceId = device_ids[i];
+			device_found = 1;
+			break;
+		} 
+	}
+
+	if(!device_found)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Create a command queue
+    //
+	ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
+	if (!ComputeCommands)
+	{
+		printf("Error: Failed to create a command queue!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Report the device vendor and device name
+    // 
+	cl_char vendor_name[1024] = {0};
+	cl_char device_name[1024] = {0};
+	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
+	err|= clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_NAME, sizeof(device_name), device_name, &returned_size);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve device info!\n");
+		return EXIT_FAILURE;
+	}
+
+	printf(SEPARATOR);
+	printf("Connecting to %s %s...\n", vendor_name, device_name);
+
+	return CL_SUCCESS;
+}
+
+static int
+SetupGLProgram()
+{
+	GLenum error_check_value = glGetError();
+
+	if(VertexShaderID)
+		glDeleteShader(VertexShaderID);
+	VertexShaderID = glCreateShader(GL_VERTEX_SHADER);
+	glShaderSource(VertexShaderID, 1, &VertexShaderSource, NULL);
+	glCompileShader(VertexShaderID);
+
+	if(FragShaderID)
+		glDeleteShader(FragShaderID);
+	FragShaderID = glCreateShader(GL_FRAGMENT_SHADER);
+	glShaderSource(FragShaderID, 1, &FragShaderSource, NULL);
+	glCompileShader(FragShaderID);
+
+	if (GLProgramID)
+	{
+		glUseProgram(0);
+		glDeleteProgram(GLProgramID);
+	}
+	GLProgramID = glCreateProgram();
+	glAttachShader(GLProgramID, VertexShaderID);
+	glAttachShader(GLProgramID, FragShaderID);
+
+	glLinkProgram(GLProgramID);
+	glUseProgram(GLProgramID);
+
+	VboPosLoc[0] = glGetAttribLocation(GLProgramID, "pos0");
+	VboPosLoc[1] = glGetAttribLocation(GLProgramID, "pos1");
+
+	printf("%d %d\n", VboPosLoc[0], VboPosLoc[1]);
+
+    UniformCurBufIdxLocation = glGetUniformLocation(GLProgramID, "curBufIdx");
+    if(UniformCurBufIdxLocation == 0xFFFFFFFF)
+    	return -1;
+
+	error_check_value = glGetError();
+	if (error_check_value != GL_NO_ERROR)
+	{
+		fprintf(stderr, "error: %s: %s\n",
+			__FUNCTION__,
+			gluErrorString(error_check_value));
+		exit(1);
+	}
+
+	return 1;
+}
+
+static int 
+SetupComputeKernel(void)
+{
+	int err = 0;
+	char *source = 0;
+	size_t length = 0;
+
+	if(ComputeKernel)
+		clReleaseKernel(ComputeKernel);    
+	ComputeKernel = 0;
+
+	if(ComputeProgram)
+		clReleaseProgram(ComputeProgram);
+	ComputeProgram = 0;
+
+	printf(SEPARATOR);
+	printf("Loading kernel source from file '%s'...\n", COMPUTE_KERNEL_FILENAME);    
+	err = LoadTextFromFile(COMPUTE_KERNEL_FILENAME, &source, &length);
+	if (!source || err)
+	{
+		printf("Error: Failed to load kernel source!\n");
+		return EXIT_FAILURE;
+	}
+
+#if (DEBUG_INFO)
+	printf("%s", source);
+#endif
+
+    // Create the compute program from the source buffer
+    //
+	ComputeProgram = clCreateProgramWithSource(ComputeContext, 1, (const char **) & source, NULL, &err);
+	if (!ComputeProgram || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute program!\n");
+		return EXIT_FAILURE;
+	}
+	free(source);
+
+    // Build the program executable
+    //
+    // err = clBuildProgram(ComputeProgram, 0, NULL, "-x clc++", NULL, NULL);
+	err = clBuildProgram(ComputeProgram, 0, NULL, NULL, NULL, NULL);
+	if (err != CL_SUCCESS)
+	{
+		size_t len;
+		char buffer[2048];
+
+		printf("Error: Failed to build program executable!\n");
+		clGetProgramBuildInfo(ComputeProgram, ComputeDeviceId, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
+		printf("%s\n", buffer);
+		return EXIT_FAILURE;
+	}
+
+    // Create the compute kernel from within the program
+    //
+	printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_MATMUL_NAME); 
+	ComputeKernel = clCreateKernel(ComputeProgram, COMPUTE_KERNEL_MATMUL_NAME, &err);
+
+	if (!ComputeKernel || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute kernel!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get the maximum work group size for executing the kernel on the device
+    //
+	err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxWorkGroupSize, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve kernel work group info! %d\n", err);
+		exit(1);
+	}
+
+#if (DEBUG_INFO)
+	printf("MaxWorkGroupSize: %d\n", MaxWorkGroupSize);
+	printf("WorkGroupItems: %d\n", WorkGroupItems);
+#endif
+
+	WorkGroupSize[0] = (MaxWorkGroupSize > 1) ? (MaxWorkGroupSize / WorkGroupItems) : MaxWorkGroupSize;
+    // WorkGroupSize[1] = MaxWorkGroupSize / WorkGroupSize[0];
+
+	printf(SEPARATOR);
+
+	// Setup several arguments that won't change
+    // DataBodyCount
+    err = clSetKernelArg(
+                 ComputeKernel,
                  2,
-                 sizeof(cl_int),
-                 (void *)&numBodies);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (numBodies)");
+                 sizeof(int),
+                 (void *)&DataBodyCount);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to set kernel arg 2: DataBodyCount! %d\n", err);
+		exit(1);
+	}
 
     // time step
-    status = clSetKernelArg(
-                 kernel,
+    err = clSetKernelArg(
+                 ComputeKernel,
                  3,
-                 sizeof(cl_float),
+                 sizeof(float),
                  (void *)&delT);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (delT)");
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to set kernel arg 3: delT! %d\n", err);
+		exit(1);
+	}
 
     // upward Pseudoprobability
-    status = clSetKernelArg(
-                 kernel,
+    err = clSetKernelArg(
+                 ComputeKernel,
                  4,
-                 sizeof(cl_float),
+                 sizeof(float),
                  (void *)&espSqr);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (espSqr)");
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to set kernel arg 4: espSqr! %d\n", err);
+		exit(1);
+	}
 
+	return CL_SUCCESS;
+}
 
-    return SDK_SUCCESS;
+static void
+Cleanup(void)
+{
+	clFinish(ComputeCommands);
+	clReleaseKernel(ComputeKernel);
+	clReleaseProgram(ComputeProgram);
+	clReleaseCommandQueue(ComputeCommands);
+	clReleaseMemObject(ComputePosBuffer[0]);
+	clReleaseMemObject(ComputePosBuffer[1]);
+	clReleaseMemObject(ComputeVelBuffer[0]);
+	clReleaseMemObject(ComputeVelBuffer[1]);
+	clReleaseContext(ComputeContext);
+
+	ComputeCommands = 0;
+	ComputeKernel = 0;
+	ComputeProgram = 0;    
+	ComputePosBuffer[0] = 0;
+	ComputePosBuffer[1] = 0;
+	ComputeContext = 0;
+
+	if (DataInput)
+		free(DataInput);
+}
+
+static void
+Shutdown(void)
+{   fclose(fp);
+	printf(SEPARATOR);
+	printf("Shutting down...\n");
+	Cleanup();
+	exit(0);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+SetupGraphics(void)
+{
+	GLenum GlewInitResult;
+
+	GlewInitResult = glewInit();
+	if (GlewInitResult != GLEW_OK)
+	{
+		fprintf(stderr, "ERROR: %s\n", glewGetErrorString(GlewInitResult));
+		exit(1);
+	}
+
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+
+	glDisable(GL_DEPTH_TEST);
+	glViewport(0, 0, WindowWidth, WindowHeight);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+
+	return GL_NO_ERROR;
+}
+
+static int 
+Initialize(int gpu)
+{
+	int err;
+	err = SetupGraphics();
+	if (err != GL_NO_ERROR)
+	{
+		printf ("Failed to setup OpenGL state!");
+		exit (err);
+	}
+
+	err = SetupComputeDevices(gpu);
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to connect to compute device! Error %d\n", err);
+		exit (err);
+	}
+
+	err = InitData();
+	if (err != 1)
+	{
+		printf ("Failed to Init FFT Data! Error %d\n", err);
+		exit (err);
+	}
+
+	err = SetupGLProgram();
+	if (err != 1)
+	{
+		printf ("Failed to setup OpenGL Shader! Error %d\n", err);
+		exit (err);
+	}
+
+	err = CreateGLResouce();
+	if (err != 1)
+	{
+		printf ("Failed to create GL resource! Error %d\n", err);
+		exit (err);
+	}
+
+	err = SetupComputeKernel();
+	if (err != CL_SUCCESS)
+	{
+		printf ("Failed to setup compute kernel! Error %d\n", err);
+		exit (err);
+	}
+
+	err = CreateComputeResource();
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to create compute result! Error %d\n", err);
+		exit (err);
+	}
+
+	return CL_SUCCESS;
 }
 
 
-int NBody::runCLKernels()
+static void
+ReportInfo(void)
 {
-    cl_int status;
+	if(ShowStats)
+	{
+		int iX = 20;
+		int iY = 20;
 
-    int currentBuffer = currentPosBufferIndex;
-    int nextBuffer = (currentPosBufferIndex+1)%2;
+		DrawText(iX - 1, WindowHeight - iY - 1, 0, StatsString);
+		DrawText(iX - 2, WindowHeight - iY - 2, 0, StatsString);
+		DrawText(iX, WindowHeight - iY, 1, StatsString);
+	}
 
-    /*
-    * Enqueue a kernel run call.
-    */
-    size_t globalThreads[] = {numBodies};
-    size_t localThreads[] = {groupSize};
+	if(ShowInfo)
+	{
+		int iX = TextOffset[0];
+		int iY = WindowHeight - TextOffset[1];
 
-    // Particle positions
-    status = clSetKernelArg(kernel,0,sizeof(cl_mem),
-                            (void*) (particlePos+currentBuffer));
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedPos)");
+		DrawText(WindowWidth - iX - 1 - strlen(InfoString) * 10, WindowHeight - iY - 1, 0, InfoString);
+		DrawText(WindowWidth - iX - 2 - strlen(InfoString) * 10, WindowHeight - iY - 2, 0, InfoString);
+		DrawText(WindowWidth - iX - strlen(InfoString) * 10, WindowHeight - iY, 1, InfoString);
 
-    // Particle velocity
-    status = clSetKernelArg(kernel,1,sizeof(cl_mem),
-                            (void *) (particleVel+currentBuffer));
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (updatedVel)");
-
-    // Particle positions
-    status = clSetKernelArg(kernel,5,sizeof(cl_mem),
-                            (void*) (particlePos+nextBuffer));
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (unewPos)");
-
-    // Particle velocity
-    status = clSetKernelArg(kernel,6,sizeof(cl_mem),
-                            (void*) (particleVel+nextBuffer));
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (newVel)");
-
-    status = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,globalThreads,
-                                    localThreads,0,NULL,NULL);
-    CHECK_OPENCL_ERROR(status, "clEnqueueNDRangeKernel failed.");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    currentPosBufferIndex = nextBuffer;
-    timerNumFrames++;
-    return SDK_SUCCESS;
+		ShowInfo = (ShowInfo > 200) ? 0 : ShowInfo + 1;
+	}
 }
 
-float* NBody::getMappedParticlePositions()
+static void 
+ReportStats(
+	uint64_t uiStartTime, uint64_t uiEndTime)
 {
-    cl_int status;
-    mappedPosBufferIndex = currentPosBufferIndex;
-    mappedPosBuffer = (float*) clEnqueueMapBuffer(commandQueue,
-                      particlePos[mappedPosBufferIndex], CL_TRUE, CL_MAP_READ
-                      , 0, numBodies*4*sizeof(float), 0, NULL, NULL, &status);
-    return mappedPosBuffer;
+	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
+
+	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
+	{
+		double fMs = (TimeElapsed / (double) FrameCount);
+		double fFps = 1.0 / (fMs / 1000.0);
+
+		sprintf(StatsString, "[%s] Compute: %3.2f ms  Display: %3.2f fps (%s)\n", 
+			(ComputeDeviceType == CL_DEVICE_TYPE_GPU) ? "GPU" : "CPU", 
+			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
+
+		glutSetWindowTitle(StatsString);
+		fprintf(fp,"%s", StatsString);
+		FrameCount = 0;
+		TimeElapsed = 0;
+	}    
 }
 
-void NBody::releaseMappedParticlePositions()
+static void
+Display_(void)
 {
-    if (mappedPosBuffer)
-    {
-        cl_int status = clEnqueueUnmapMemObject(commandQueue,
-                                                particlePos[mappedPosBufferIndex], mappedPosBuffer, 0, NULL, NULL);
-        status = status;
-        mappedPosBuffer = NULL;
-        clFlush(commandQueue);
-    }
-}
+	FrameCount++;
+	uint64_t uiStartTime = GetCurrentTime();
 
-/*
-* n-body simulation on cpu
-*/
-void
-NBody::nBodyCPUReference(float* currentPos, float* currentVel, float* newPos,
-                         float* newVel)
-{
-    //Iterate for all samples
-    for(int i = 0; i < numBodies; ++i)
-    {
-        int myIndex = 4 * i;
-        float acc[3] = {0.0f, 0.0f, 0.0f};
-        for(int j = 0; j < numBodies; ++j)
-        {
-            float r[3];
-            int index = 4 * j;
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+	glClear(GL_COLOR_BUFFER_BIT);
 
-            float distSqr = 0.0f;
-            for(int k = 0; k < 3; ++k)
-            {
-                r[k] = currentPos[index + k] - currentPos[myIndex + k];
+	if(Animated || Update)
+	{
+		int err = Recompute();
+		if (err != 0)
+		{
+			printf("Error %d from Recompute!\n", err);
+			exit(1);
+		}
 
-                distSqr += r[k] * r[k];
-            }
+	}
 
-            float invDist = 1.0f / sqrt(distSqr + espSqr);
-            float invDistCube =  invDist * invDist * invDist;
-            float s = currentPos[index + 3] * invDistCube;
+	// glBindVertexArray(VaoID);
+	glDrawArrays(GL_POINTS, 0, DataBodyCount);
+	ReportInfo();
 
-            for(int k = 0; k < 3; ++k)
-            {
-                acc[k] += s * r[k];
-            }
-        }
+    glFinish(); // for timing
 
-        for(int k = 0; k < 3; ++k)
-        {
-            newPos[myIndex + k] = currentPos[myIndex + k] + currentVel[myIndex + k] * delT +
-                                  0.5f * acc[k] * delT * delT;
-            newVel[myIndex + k] = currentVel[myIndex + k] + acc[k] * delT;
-        }
-        newPos[myIndex+3] = currentPos[myIndex + 3];
-    }
-}
-
-int
-NBody::initialize()
-{
-    // Call base class Initialize to get default configuration
-    int status = 0;
-    status = status;
-    if (sampleArgs->initialize() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    Option *num_particles = new Option;
-    CHECK_ALLOCATION(num_particles,
-                     "error. Failed to allocate memory (num_particles)\n");
-
-    num_particles->_sVersion = "x";
-    num_particles->_lVersion = "particles";
-    num_particles->_description = "Number of particles";
-    num_particles->_type = CA_ARG_INT;
-    num_particles->_value = &numParticles;
-
-    sampleArgs->AddOption(num_particles);
-    delete num_particles;
-
-    Option *num_iterations = new Option;
-    CHECK_ALLOCATION(num_iterations,
-                     "error. Failed to allocate memory (num_iterations)\n");
-
-    num_iterations->_sVersion = "i";
-    num_iterations->_lVersion = "iterations";
-    num_iterations->_description = "Number of iterations";
-    num_iterations->_type = CA_ARG_INT;
-    num_iterations->_value = &iterations;
-
-    sampleArgs->AddOption(num_iterations);
-    delete num_iterations;
-
-    return SDK_SUCCESS;
-}
-
-int
-NBody::setup()
-{
-    int status = 0;
-    if(setupNBody() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
-    status = setupCL();
-    if(status != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    sampleTimer->stopTimer(timer);
-    // Compute setup time
-    setupTime = (double)(sampleTimer->readTimer(timer));
-
-    display = !sampleArgs->quiet && !sampleArgs->verify;
-
-    return SDK_SUCCESS;
-}
-
-/**
-* @brief Initialize GL
-*/
-void
-GLInit()
-{
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-}
-
-/**
-* @brief Glut Idle function
-*/
-void
-idle()
-{
-    glutPostRedisplay();
-}
-
-/**
-* @brief Glut reshape func
-*
-* @param w numParticles of OpenGL window
-* @param h height of OpenGL window
-*/
-void
-reShape(int w,int h)
-{
-    glViewport(0, 0, w, h);
-
-    glViewport(0, 0, w, h);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    gluPerspective(45.0f, w/h, 1.0f, 1000.0f);
-    gluLookAt (0.0, 0.0, -2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0);
-}
-
-/**
-* @brief OpenGL display function
-*/
-void displayfunc()
-{
-    static int numFrames = 0;
-
-    glClearColor(0.0 ,0.0, 0.0, 0.0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClear(GL_DEPTH_BUFFER_BIT);
-
-    glPointSize(1.0);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glEnable(GL_BLEND);
-    glDepthMask(GL_FALSE);
-
-    glColor3f(1.0f, 0.5f, 0.5f);
-
-    NBody *nb = (NBody *)me;
-    if (nb->isFirstLuanch)
-    {
-        //Calling kernel for calculatig subsequent positions
-        nb->runCLKernels();
-        nb->isFirstLuanch = false;
-        return;
-    }
-
-
-    int numBodies = nb->numParticles;
-    float* pos = nb->getMappedParticlePositions();
-    nb->runCLKernels();
-    glBegin(GL_POINTS);
-    for(int i = 0; i < numBodies; ++i,pos+=4)
-    {
-        //divided by 300 just for scaling
-        glVertex4f(*pos,*(pos+1),*(pos+2),50.0f);
-    }
-    glEnd();
-    nb->releaseMappedParticlePositions();
-
-    //Calling kernel for calculating subsequent positions
-    glFlush();
+    uint64_t uiEndTime = GetCurrentTime();
+    ReportStats(uiStartTime, uiEndTime);
+    DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
     glutSwapBuffers();
-
-    numFrames++;
-    // update window title with FPS
-    if (numFrames >= 100)
-    {
-        char buf[256];
-        sprintf(buf, "N-body simulation - %d Particles, %.02f FPS"
-                , nb->numParticles, (float)nb->getFPS());
-        glutSetWindowTitle(buf);
-        numFrames = 0;
-    }
 }
 
-// keyboard function
-void
-keyboardFunc(unsigned char key, int mouseX, int mouseY)
+static void 
+Reshape (int w, int h)
 {
-    switch(key)
-    {
-        // If the user hits escape or Q, then exit
+	glViewport(0, 0, w, h);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glClear(GL_COLOR_BUFFER_BIT);
+	glutSwapBuffers();
 
-        // ESCAPE_KEY = 27
-    case 27:
-    case 'q':
-    case 'Q':
-    {
-        if(((NBody*)me)->cleanup() != SDK_SUCCESS)
-        {
-            exit(1);
-        }
-        else
-        {
-            exit(0);
-        }
-    }
-    default:
-        break;
-    }
+	if(w > 2 * WindowWidth || h > 2 * WindowHeight)
+	{
+		WindowWidth = w;
+		WindowHeight = h;
+		Cleanup();
+		if(Initialize(ComputeDeviceType == CL_DEVICE_TYPE_GPU) != GL_NO_ERROR)
+			Shutdown();
+	}
+
+	WindowWidth = w;
+	WindowHeight = h;    
 }
 
-
-int
-NBody::run()
+void Keyboard( unsigned char key, int x, int y )
 {
-    int status = 0;
-    status = status;
-    // Arguments are set and execution call is enqueued on command buffer
-    if(setupCLKernels() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
+	switch( key )
+	{
+		case 27:
+		exit(0);
+		break;
 
-    if(sampleArgs->verify || sampleArgs->timing)
-    {
-        int timer = sampleTimer->createTimer();
-        sampleTimer->resetTimer(timer);
-        sampleTimer->startTimer(timer);
+		case ' ':
+		Animated = !Animated;
+		sprintf(InfoString, "Animated = %s\n", Animated ? "true" : "false");
+		ShowInfo = 1;
+		break;
 
-        for(int i = 0; i < iterations; ++i)
-        {
-            if(runCLKernels() != SDK_SUCCESS)
-            {
-                return SDK_FAILURE;
-            }
-        }
+		case 'i':
+		ShowInfo = ShowInfo > 0 ? 0 : 1;
+		break;
 
-        status = clFinish(this->commandQueue);
-        sampleTimer->stopTimer(timer);
-        // Compute kernel time
-        kernelTime = (double)(sampleTimer->readTimer(timer)) / iterations;
-
-        if(!sampleArgs->quiet)
-        {
-            float* pos = getMappedParticlePositions();
-            printArray<cl_float>("Output", pos, numBodies, 1);
-            releaseMappedParticlePositions();
-        }
-    }
-    return SDK_SUCCESS;
+		case 's':
+		ShowStats = ShowStats > 0 ? 0 : 1;
+		break;
+	}
+	Update = 1;
+	glutPostRedisplay();
 }
 
-int
-NBody::verifyResults()
+void Idle(void)
 {
-    int ret = SDK_SUCCESS;
-    if(sampleArgs->verify)
-    {
-        float* posBuffers[2];
-        float* velBuffers[2];
-        for (int i = 0; i < 2; i++)
-        {
-            posBuffers[i] = (float*)malloc(numBodies * 4 * sizeof(float));
-            CHECK_ALLOCATION(posBuffers[i], "Failed to allocate host memory. posBuffers");
-            velBuffers[i] = (float*)malloc(numBodies * 4 * sizeof(float));
-            CHECK_ALLOCATION(velBuffers[i], "Failed to allocate host memory. velBuffers");
-        }
-        memcpy(posBuffers[0], initPos, 4 * numBodies * sizeof(float));
-        memset(velBuffers[0], 0, numBodies * 4 * sizeof(float));
-        for(int i = 0; i < iterations; ++i)
-        {
-            int current = i%2;
-            int next = (i+1)%2;
-            nBodyCPUReference(posBuffers[current], velBuffers[current]
-                              , posBuffers[next], velBuffers[next]);
-        }
-
-        // compare the results and see if they match
-        float* pos = getMappedParticlePositions();
-        if(compare(pos, posBuffers[(iterations)%2], 4 * numBodies, 0.00001))
-        {
-            std::cout << "Passed!\n" << std::endl;
-            ret = SDK_SUCCESS;
-        }
-        else
-        {
-            std::cout << "Failed!\n" << std::endl;
-            ret = SDK_FAILURE;
-        }
-        releaseMappedParticlePositions();
-
-        for (int i = 0; i < 2; i++)
-        {
-            free(posBuffers[i]);
-            free(velBuffers[i]);
-        }
-
-    }
-    return ret;
+	glutPostRedisplay();
 }
 
-void
-NBody::printStats()
+int main(int argc, char** argv)
 {
-    if(sampleArgs->timing)
-    {
-        std::string strArray[4] =
-        {
-            "Particles",
-            "Iterations",
-            "Time(sec)",
-            "kernelTime(sec)"
-        };
+    // Parse command line options
+    //
+	int i;
+	int use_gpu = 1;
+	for( i = 0; i < argc && argv; i++)
+	{
+		if(!argv[i])
+			continue;
 
-        std::string stats[4];
-        sampleTimer->totalTime = setupTime + kernelTime;
+		if(strstr(argv[i], "cpu"))
+			use_gpu = 0;        
 
-        stats[0] = toString(numParticles, std::dec);
-        stats[1] = toString(iterations, std::dec);
-        stats[2] = toString(sampleTimer->totalTime, std::dec);
-        stats[3] = toString(kernelTime, std::dec);
+		else if(strstr(argv[i], "gpu"))
+			use_gpu = 1;
+	}
 
-        printStatistics(strArray, stats, 4);
-    }
+	fp = fopen("fft_res", "w+");
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+	glutInitWindowSize (WindowWidth, WindowHeight);
+	glutInitWindowPosition (100, 100);
+	glutCreateWindow (argv[0]);
+	if (Initialize (use_gpu) == GL_NO_ERROR)
+	{
+		glutDisplayFunc(Display_);
+		glutIdleFunc(Idle);
+		glutReshapeFunc(Reshape);
+		glutKeyboardFunc(Keyboard);
+
+		atexit(Shutdown);
+		printf("Starting event loop...\n");
+
+		glutMainLoop();
+	}
+
+	return 0;
 }
 
-int
-NBody::cleanup()
-{
-    // Releases OpenCL resources (Context, Memory etc.)
-    cl_int status;
-
-    status = clReleaseKernel(kernel);
-    CHECK_OPENCL_ERROR(status, "clReleaseKernel failed.(kernel)");
-
-    status = clReleaseProgram(program);
-    CHECK_OPENCL_ERROR(status, "clReleaseProgram failed.(program)");
-
-    for (int i = 0; i < 2; i++)
-    {
-        status = clReleaseMemObject(particlePos[i]);
-        CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(particlePos)");
-        status = clReleaseMemObject(particleVel[i]);
-        CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.(particleVel)");
-    }
-
-    status = clReleaseCommandQueue(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clReleaseCommandQueue failed.(commandQueue)");
-
-    status = clReleaseContext(context);
-    CHECK_OPENCL_ERROR(status, "clReleaseContext failed.(context)");
-
-    return SDK_SUCCESS;
-}
-
-NBody::~NBody()
-{
-    if (this->glEvent)
-    {
-        clReleaseEvent(this->glEvent);
-    }
-    // release program resources
-    FREE(initPos);
-
-    FREE(initVel);
-
-#if defined (_WIN32)
-    ALIGNED_FREE(pos);
-#else
-    FREE(pos);
-#endif
-
-#if defined (_WIN32)
-    ALIGNED_FREE(vel);
-#else
-    FREE(vel);
-#endif
-
-    FREE(devices);
-}
-
-
-int
-main(int argc, char * argv[])
-{
-    int status = 0;
-    NBody clNBody;
-    me = &clNBody;
-
-    if(clNBody.initialize() != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    if (clNBody.sampleArgs->parseCommandLine(argc, argv) != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    if(clNBody.sampleArgs->isDumpBinaryEnabled())
-    {
-        return clNBody.genBinaryImage();
-    }
-
-    status = clNBody.setup();
-    if(status != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    status = clNBody.run();
-    CHECK_ERROR(status, SDK_SUCCESS, "Sample Run Program Failed");
-
-    status = clNBody.verifyResults();
-    CHECK_ERROR(status, SDK_SUCCESS, "Sample Verify Results Failed");
-
-    clNBody.printStats();
-
-    if(display)
-    {
-        // Run in  graphical window if requested
-        glutInit(&argc, argv);
-        glutInitWindowPosition(100,10);
-        glutInitWindowSize(600,600);
-        glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
-        glutCreateWindow("N-body simulation");
-        GLInit();
-        glutDisplayFunc(displayfunc);
-        glutReshapeFunc(reShape);
-        glutIdleFunc(idle);
-        glutKeyboardFunc(keyboardFunc);
-        glutMainLoop();
-    }
-
-    status = clNBody.cleanup();
-    CHECK_ERROR(status, SDK_SUCCESS, "Sample CleanUP Failed");
-
-    return SDK_SUCCESS;
-}

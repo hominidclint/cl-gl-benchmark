@@ -1372,14 +1372,18 @@ int main(int argc, char** argv)
             Animated = 1;
 
         else if(strstr(argv[i], "-output"))
+        {
             EnableOutput = 1;
+            fp = fopen(argv[i+1], "w+");
+        }
+
+        else if(strstr(argv[i], "-particles"))
+            DataParticleCount = atoi(argv[i+1]);
 
         else if(strstr(argv[i], "-maxframe"))
             MaxNDRange = atoi(argv[i+1]);
     }
 
-    if (EnableOutput)
-        fp = fopen("fft_res", "w+");
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize (WindowWidth, WindowHeight);
@@ -1400,4 +1404,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-

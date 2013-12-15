@@ -1,1273 +1,1169 @@
-/**********************************************************************
-Copyright ©2013 Advanced Micro Devices, Inc. All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-•   Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-•   Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or
- other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
- DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-********************************************************************/
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// OpenCL Kernel taken from AMDAPPSDK
+// Program Structure from APPLE QJulia
+// Remixed by Xiang
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-#include "GaussianNoise.hpp"
-#include <cmath>
-
-#ifndef _WIN32
-#include <GL/glx.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
 #include <unistd.h>
-#endif //!_WIN32
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 
-#ifdef _WIN32
-static HWND               gHwnd;
-HDC                       gHdc;
-HGLRC                     gGlCtx;
-BOOL quit = FALSE;
-MSG msg;
-#else
-GLXContext gGlCtxSep;
-#define GLX_CONTEXT_MAJOR_VERSION_ARB           0x2091
-#define GLX_CONTEXT_MINOR_VERSION_ARB           0x2092
-typedef GLXContext (*GLXCREATECONTEXTATTRIBSARBPROC)(Display*, GLXFBConfig,
-        GLXContext, Bool, const int*);
-Window          winSep;
-Display         *displayNameSep;
-XEvent          xevSep;
-#endif
+#include <GL/gl.h>
+#include <GL/glx.h>
+#include <GL/freeglut.h>
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
 
+#include "CLUtil.hpp"
+#include "SDKBitMap.hpp"
+using namespace appsdk;
 
-int verfactor = FACTOR;
-#ifdef _WIN32
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+////////////////////////////////////////////////////////////////////////////////
+
+#define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
+#define DEBUG_INFO                      (0)     
+#define COMPUTE_KERNEL_FILENAME_1       ("GaussianNoiseGL_Kernels.cl")
+#define COMPUTE_KERNEL_FILENAME_2       ("GaussianNoiseGL_Kernels2.cl")
+#define COMPUTE_KERNEL_METHOD_NAME      ("gaussian_transform")
+#define SEPARATOR                       ("----------------------------------------------------------------------\n")
+
+////////////////////////////////////////////////////////////////////////////////
+
+#define INPUT_IMAGE                     ("GaussianNoiseGL_Input.bmp")
+
+#define GROUP_SIZE                      (64)
+#define FACTOR                          (60)
+
+static SDKBitMap                        InputBitmap;
+static cl_uchar4                        *InputImageData;
+static cl_uchar4                        *OutputImageData;
+static uchar4                           *PixelData;
+static cl_uint                          PixelSize = sizeof(uchar4);
+
+////////////////////////////////////////////////////////////////////////////////
+
+static cl_context                       ComputeContext;
+static cl_command_queue                 ComputeCommands;
+static cl_kernel                        ComputeKernel;
+static cl_program                       ComputeProgram;
+static cl_program                       ComputeProgram1;
+static cl_program                       ComputeProgram2;
+static cl_device_id                     ComputeDeviceId;
+static cl_device_type                   ComputeDeviceType;
+static cl_mem                           ComputeInputImage;
+static cl_mem                           ComputeOutputImage;
+static size_t                           MaxBlockSize;
+static size_t                           BlockSize[2];
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int VarFactor                    = 60;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int Width                        = 0;
+static int Height                       = 0;
+
+static int Animated                     = 0;
+static int Update                       = 1;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static uint TextureId                   = 0;
+static uint TextureTarget               = GL_TEXTURE_2D;
+static uint TextureInternal             = GL_RGBA;
+static uint TextureFormat               = GL_RGBA;
+static uint TextureType                 = GL_UNSIGNED_BYTE;
+static uint TextureWidth                = 0;
+static uint TextureHeight               = 0;
+static size_t TextureTypeSize           = sizeof(unsigned char);
+static uint ActiveTextureUnit           = GL_TEXTURE1_ARB;
+static void* HostImageBuffer            = 0;
+
+static double TimeElapsed               = 0;
+static int FrameCount                   = 0;
+static uint ReportStatsInterval         = 30;
+
+static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
+static float HighlightTextColor[4]      = { 0.9f, 0.9f, 0.9f, 1.0f };
+static uint TextOffset[2]               = { 25, 25 };
+
+static uint ShowStats                   = 1;
+static char StatsString[512]            = "\0";
+static uint ShowInfo                    = 1;
+static char InfoString[512]             = "\0";
+
+static float VertexPos[4][2]            = { { -1.0f, -1.0f },
+{ +1.0f, -1.0f },
+{ +1.0f, +1.0f },
+{ -1.0f, +1.0f } };
+static float TexCoords[4][2];
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int EnableOutput                 = 0;
+FILE *fp;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static long
+GetCurrentTime()
 {
-    switch (message)
-    {
+	struct timeval tv;
 
-    case WM_CREATE:
-        return 0;
+	gettimeofday(&tv, NULL);
 
-    case WM_CLOSE:
-        PostQuitMessage( 0 );
-        return 0;
-
-    case WM_DESTROY:
-        return 0;
-
-    case WM_KEYDOWN:
-        switch ( wParam )
-        {
-        case VK_ESCAPE:
-            PostQuitMessage(0);
-            return 0;
-        case 0x57: //'W'
-            verfactor += 2;
-            break;
-        case 0x53://'S'
-            verfactor -= 2;
-            break;
-        }
-        return 0;
-
-    default:
-        return DefWindowProc( hWnd, message, wParam, lParam );
-
-    }
+	return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
 }
+
+static double 
+SubtractTime( long uiEndTime, long uiStartTime )
+{
+	return uiEndTime - uiStartTime;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static int LoadTextFromFile(
+	const char *file_name, char **result_string, size_t *string_len)
+{
+	int fd;
+	unsigned file_len;
+	struct stat file_status;
+	int ret;
+
+	*string_len = 0;
+	fd = open(file_name, O_RDONLY);
+	if (fd == -1)
+	{
+		printf("Error opening file %s\n", file_name);
+		return -1;
+	}
+	ret = fstat(fd, &file_status);
+	if (ret)
+	{
+		printf("Error reading status for file %s\n", file_name);
+		return -1;
+	}
+	file_len = file_status.st_size;
+
+	*result_string = (char*)calloc(file_len + 1, sizeof(char));
+	ret = read(fd, *result_string, file_len);
+	if (!ret)
+	{
+		printf("Error reading from file %s\n", file_name);
+		return -1;
+	}
+
+	close(fd);
+
+	*string_len = file_len;
+	return 0;
+}
+
+static void DrawString(float x, float y, float color[4], char *buffer)
+{
+	unsigned int uiLen, i;
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+
+	glRasterPos2f(x, y);
+	glColor3f(color[0], color[1], color[2]);
+	uiLen = (unsigned int) strlen(buffer);
+	for (i = 0; i < uiLen; i++)
+	{
+		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, buffer[i]);
+	}
+	glPopAttrib();
+}
+
+static void DrawText(float x, float y, int light, const char *format, ...)
+{
+	va_list args;
+	char buffer[256];
+	GLint iVP[4];
+	GLint iMatrixMode;
+
+	va_start(args, format);
+	vsprintf(buffer, format, args);
+	va_end(args);
+
+	glPushAttrib(GL_LIGHTING_BIT);
+	glDisable(GL_LIGHTING);
+	glDisable(GL_BLEND);
+
+	glGetIntegerv(GL_VIEWPORT, iVP);
+	glViewport(0, 0, Width, Height);
+	glGetIntegerv(GL_MATRIX_MODE, &iMatrixMode);
+
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glScalef(2.0f / Width, -2.0f / Height, 1.0f);
+	glTranslatef(-Width / 2.0f, -Height / 2.0f, 0.0f);
+
+	if(light)
+	{
+		glColor4fv(ShadowTextColor);
+		DrawString(x-0, y-0, ShadowTextColor, buffer);
+
+		glColor4fv(HighlightTextColor);
+		DrawString(x-2, y-2, HighlightTextColor, buffer);
+	}
+	else
+	{
+		glColor4fv(HighlightTextColor);
+		DrawString(x-0, y-0, HighlightTextColor, buffer);
+
+		glColor4fv(ShadowTextColor);
+		DrawString(x-2, y-2, ShadowTextColor, buffer);   
+	}
+
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+
+	glPopMatrix();
+	glMatrixMode(iMatrixMode);
+
+	glPopAttrib();
+	glViewport(iVP[0], iVP[1], iVP[2], iVP[3]);
+}
+
+static int ReadInputImage(const char *file_name)
+{
+	InputBitmap.load(file_name);
+	if(!InputBitmap.isLoaded())
+	{
+		printf("Failed to load input image!\n");
+		return -1;
+	}
+
+	return 1;
+}
+
+static int InitData()
+{
+	int err;
+
+	err = ReadInputImage(INPUT_IMAGE);
+	if (err != 1)
+		return -1;
+
+    // Get width and height of input image
+	Width = InputBitmap.getWidth();
+	Height = InputBitmap.getHeight();
+	TextureWidth = Width;
+	TextureHeight = Height;
+
+#if (DEBUG_INFO)
+
+	printf("Image Height = %d, Width = %d\n");
+
 #endif
 
-int
-GaussianNoiseGL::readInputImage(std::string inputImageName)
-{
-    // load input bitmap image
-    std::string filePath = getPath() + std::string(INPUT_IMAGE);
-    inputBitmap.load(filePath.c_str());
-    if(!inputBitmap.isLoaded())
-    {
-        std::cout << "Failed to load input image!";
-        return SDK_FAILURE;
-    }
+    // Allocate memory for input & output image data
+	if (InputImageData)
+		free(InputImageData);
+	InputImageData = NULL;
 
-    // get width and height of input image
-    height = inputBitmap.getHeight();
-    width = inputBitmap.getWidth();
+	InputImageData = (cl_uchar4 *)calloc(1, Width * Height * sizeof(cl_uchar4));
+	if (!InputImageData)
+	{
+		printf("Failed to allocate memory (InputImageData)\n");
+		return -1;
+	}
 
-    // allocate memory for input & output image data
-    inputImageData  = (cl_uchar4*)malloc(width * height * sizeof(cl_uchar4));
-    CHECK_ALLOCATION(inputImageData, "Failed to allocate memory! (inputImageData)");
+	if (OutputImageData)
+		free(OutputImageData);
+	OutputImageData = NULL;
 
-    // allocate memory for output image data
-    outputImageData = (cl_uchar4*)malloc(width * height * sizeof(cl_uchar4));
-    CHECK_ALLOCATION(outputImageData,
-                     "Failed to allocate memory! (outputImageData)");
-
-    // initialize the Image data to NULL
-    memset(outputImageData, 0, width * height * pixelSize);
+	OutputImageData = (cl_uchar4 *)calloc(1, Width * Height * sizeof(cl_uchar4));
+	if (!OutputImageData)
+	{
+		printf("Failed to allocate memory (OutputImageData)\n");
+		return -1;
+	}
 
     // get the pointer to pixel data
-    pixelData = inputBitmap.getPixels();
-    if(pixelData == NULL)
-    {
-        std::cout << "Failed to read pixel Data!";
-        return SDK_FAILURE;
-    }
+	PixelData = InputBitmap.getPixels();
+	if(PixelData == NULL)
+	{
+		printf("Failed to read pixel Data!\n");
+		return -1;
+	}
 
-    // Copy pixel data into inputImageData
-    memcpy(inputImageData, pixelData, width * height * pixelSize);
+    // Copy pixel data into InputImageData
+	memcpy(InputImageData, PixelData, Width * Height * PixelSize);
 
-    return SDK_SUCCESS;
+	return CL_SUCCESS;
 }
 
+static void 
+CreateTexture(uint width, uint height)
+{    
+	if(TextureId)
+		glDeleteTextures(1, &TextureId);
+	TextureId = 0;
 
-int
-GaussianNoiseGL::writeOutputImage(std::string outputImageName)
-{
-    // copy output image data back to original pixel data
-    memcpy(pixelData, outputImageData, width * height * pixelSize);
+	printf("Creating Texture %d x %d...\n", width, height);
 
-    // write the output bmp file
-    if(!inputBitmap.write(outputImageName.c_str()))
-    {
-        error("Failed to write output image!");
-        return SDK_FAILURE;
-    }
+	TextureWidth = width;
+	TextureHeight = height;
 
-    return SDK_SUCCESS;
+	glActiveTextureARB(ActiveTextureUnit);
+	glGenTextures(1, &TextureId);
+	glBindTexture(TextureTarget, TextureId);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP);
+	glTexParameteri(TextureTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(TextureTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexImage2D(TextureTarget, 0, TextureInternal, TextureWidth, TextureHeight, 0, 
+		TextureFormat, TextureType, 0);
+	glBindTexture(TextureTarget, 0);
 }
 
-int
-GaussianNoiseGL::genBinaryImage()
+static void 
+RenderTexture( void *pvData )
 {
-    bifData binaryData;
-    binaryData.kernelName = std::string("GaussianNoiseGL_Kernels.cl");
-    binaryData.flagsStr = std::string("");
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        binaryData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
+	glDisable( GL_LIGHTING );
 
-    binaryData.binaryName = std::string(sampleArgs->dumpBinary.c_str());
-    int status = generateBinaryImage(binaryData);
-    return status;
+	glViewport( 0, 0, Width, Height );
+
+	glMatrixMode( GL_PROJECTION );
+	glLoadIdentity();
+	gluOrtho2D( -1.0, 1.0, -1.0, 1.0 );
+
+	glMatrixMode( GL_MODELVIEW );
+	glLoadIdentity();
+
+	glMatrixMode( GL_TEXTURE );
+	glLoadIdentity();
+
+	glEnable( TextureTarget );
+	glBindTexture( TextureTarget, TextureId );
+
+	if(pvData)
+		glTexSubImage2D(TextureTarget, 0, 0, 0, TextureWidth, TextureHeight, 
+			TextureFormat, TextureType, pvData);
+
+	glTexParameteri(TextureTarget, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
+	glBegin( GL_QUADS );
+	{
+		glColor3f(1.0f, 1.0f, 1.0f);
+		glTexCoord2f( 0.0f, 0.0f );
+		glVertex3f( -1.0f, -1.0f, 0.0f );
+
+		glTexCoord2f( 0.0f, 1.0f );
+		glVertex3f( -1.0f, 1.0f, 0.0f );
+
+		glTexCoord2f( 1.0f, 1.0f );
+		glVertex3f( 1.0f, 1.0f, 0.0f );
+
+		glTexCoord2f( 1.0f, 0.0f );
+		glVertex3f( 1.0f, -1.0f, 0.0f );
+	}
+	glEnd();
+	glBindTexture( TextureTarget, 0 );
+	glDisable( TextureTarget );
 }
 
-int
-GaussianNoiseGL::initializeGLAndGetCLContext(cl_platform_id platform,
-        cl_context &context,
-        cl_device_id &interopDevice)
+static int
+Recompute(void)
 {
-#ifndef _WIN32
-    cl_int status = SDK_SUCCESS;
-    displayNameSep = XOpenDisplay(NULL);
-    int screenNumber = ScreenCount(displayNameSep);
-    std::cout<<"Number of displays "<<screenNumber<<std::endl;
-    XCloseDisplay(displayNameSep);
-    for (int i = 0; i < screenNumber; i++)
-    {
-        if (sampleArgs->isDeviceIdEnabled())
-        {
-            if (i < (int)sampleArgs->deviceId)
-            {
-                continue;
-            }
-        }
-        char disp[100];
-        sprintf(disp, "DISPLAY=:0.%d", i);
-        putenv(disp);
-        displayNameSep = XOpenDisplay(0);
-        int nelements;
+	if(!ComputeKernel || !ComputeOutputImage)
+		return CL_SUCCESS;
+
+	void *values[3];
+	size_t sizes[3];
+
+	int err = 0;
+	unsigned int v = 0, s = 0, a = 0;
+	values[v++] = &ComputeInputImage;
+	values[v++] = &ComputeOutputImage;
+	values[v++] = &VarFactor;
+
+	sizes[s++] = sizeof(cl_mem);
+	sizes[s++] = sizeof(cl_mem);
+	sizes[s++] = sizeof(int);
+
+	if(Animated || Update)
+	{
+		Update = 0;
+		err = CL_SUCCESS;
+		for (a = 0; a < s; a++)
+			err |= clSetKernelArg(ComputeKernel, a, sizes[a], values[a]);
+
+		if (err)
+			return -10;
+	}
+
+#if (USE_GL_ATTACHMENTS)
+
+	// Get control from GL context
+	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to acquire GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
 
-        GLXFBConfig *fbc = glXChooseFBConfig(displayNameSep,
-                                             DefaultScreen(displayNameSep),
-                                             0,
-                                             &nelements);
-
-        static int attributeList[] = { GLX_RGBA,
-                                       GLX_DOUBLEBUFFER,
-                                       GLX_RED_SIZE,
-                                       1,
-                                       GLX_GREEN_SIZE,
-                                       1,
-                                       GLX_BLUE_SIZE,
-                                       1,
-                                       None
-                                     };
-        XVisualInfo *vi = glXChooseVisual(displayNameSep,
-                                          DefaultScreen(displayNameSep),
-                                          attributeList);
-        XSetWindowAttributes swa;
-        swa.colormap = XCreateColormap(displayNameSep,
-                                       RootWindow(displayNameSep, vi->screen),
-                                       vi->visual,
-                                       AllocNone);
-        swa.border_pixel = 0;
-        swa.event_mask = StructureNotifyMask;
-        winSep = XCreateWindow(displayNameSep,
-                               RootWindow(displayNameSep, vi->screen),
-                               10,
-                               10,
-                               width,
-                               height,
-                               0,
-                               vi->depth,
-                               InputOutput,
-                               vi->visual,
-                               CWBorderPixel|CWColormap|CWEventMask,
-                               &swa);
-
-        XMapWindow (displayNameSep, winSep);
-        std::cout << "glXCreateContextAttribsARB "
-                  << (void*) glXGetProcAddress((const GLubyte*)"glXCreateContextAttribsARB")
-                  << std::endl;
-        GLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB =
-            (GLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress((const GLubyte*)
-                    "glXCreateContextAttribsARB");
-
-        int attribs[] =
-        {
-            GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
-            GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-            0
-        };
-
-        GLXContext ctx = glXCreateContextAttribsARB(displayNameSep,
-                         *fbc,
-                         0,
-                         true,
-                         attribs);
-        glXMakeCurrent (displayNameSep,
-                        winSep,
-                        ctx);
-        gGlCtxSep = glXGetCurrentContext();
-        cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
-                                          CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
-                                          CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
-                                        };
-        if (!clGetGLContextInfoKHR)
-        {
-            clGetGLContextInfoKHR = (clGetGLContextInfoKHR_fn)
-                                    clGetExtensionFunctionAddressForPlatform(platform,"clGetGLContextInfoKHR");
-            if (!clGetGLContextInfoKHR)
-            {
-                std::cout << "Failed to query proc address for clGetGLContextInfoKHR";
-            }
-        }
-
-        size_t deviceSize = 0;
-        status = clGetGLContextInfoKHR(cpsGL,
-                                       CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
-                                       0,
-                                       NULL,
-                                       &deviceSize);
-        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
-
-        int numDevices = (deviceSize / sizeof(cl_device_id));
-        std::cout<<"Number of interoperable devices "<<numDevices<<std::endl;
-        if(numDevices == 0)
-        {
-            glXDestroyContext(glXGetCurrentDisplay(), gGlCtxSep);
-            continue;
-        }
-        else
-        {
-            //Interoperable device found
-            std::cout<<"Interoperable device found "<<std::endl;
-            break;
-        }
-    }
-    cl_context_properties cpsGL[] = { CL_CONTEXT_PLATFORM, (cl_context_properties)platform,
-                                      CL_GLX_DISPLAY_KHR, (intptr_t) glXGetCurrentDisplay(),
-                                      CL_GL_CONTEXT_KHR, (intptr_t) gGlCtxSep, 0
-                                    };
-    if (sampleArgs->deviceType.compare("gpu") == 0)
-    {
-        status = clGetGLContextInfoKHR( cpsGL,
-                                        CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR,
-                                        sizeof(cl_device_id),
-                                        &interopDeviceId,
-                                        NULL);
-        CHECK_OPENCL_ERROR(status, "clGetGLContextInfoKHR failed!!");
-
-        std::cout<<"Interop Device ID is "<<interopDeviceId<<std::endl;
-
-        // Create OpenCL context from device's id
-        context = clCreateContext(NULL,
-                                  1,
-                                  &interopDeviceId,
-                                  0,
-                                  0,
-                                  &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContext failed.");
-    }
-    else
-    {
-        context = clCreateContextFromType(NULL,
-                                          CL_DEVICE_TYPE_CPU,
-                                          NULL,
-                                          NULL,
-                                          &status);
-        CHECK_OPENCL_ERROR(status, "clCreateContextFromType failed!!");
-    }
-    // OpenGL animation code goes here
-    // GL init
-    glewInit();
-    if (! glewIsSupported("GL_VERSION_2_0 " "GL_ARB_pixel_buffer_object"))
-    {
-        std::cout << "Support for necessary OpenGL extensions missing."
-                  << std::endl;
-        return SDK_FAILURE;
-    }
-
-    glEnable(GL_TEXTURE_2D);
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-    glDisable(GL_DEPTH_TEST);
-
-    glViewport(0, 0, width, height);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(
-        60.0,
-        (GLfloat)width / (GLfloat)height,
-        0.1,
-        10.0);
-#endif
-    return SDK_SUCCESS;
-}
-
-int
-GaussianNoiseGL::setupCL()
-{
-    cl_int status = CL_SUCCESS;
-    cl_device_type dType;
-
-    if(sampleArgs->deviceType.compare("cpu") == 0)
-    {
-        dType = CL_DEVICE_TYPE_CPU;
-    }
-    else //sampleArgs->deviceType = "gpu"
-    {
-        dType = CL_DEVICE_TYPE_GPU;
-        if(sampleArgs->isThereGPU() == false)
-        {
-            std::cout << "GPU not found. Falling back to CPU device" << std::endl;
-            dType = CL_DEVICE_TYPE_CPU;
-        }
-    }
-
-    /*
-     * Have a look at the available platforms and pick either
-     * the AMD one if available or a reasonable default.
-     */
-    cl_platform_id platform = NULL;
-    int retValue = getPlatform(platform, sampleArgs->platformId,
-                               sampleArgs->isPlatformEnabled());
-    CHECK_ERROR(retValue, SDK_SUCCESS, "getPlatform() failed");
-
-    // Display available devices.
-    retValue = displayDevices(platform, dType);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "displayDevices() failed");
-
-    retValue = initializeGLAndGetCLContext(platform,
-                                           context,
-                                           interopDeviceId);
-    if (retValue != SDK_SUCCESS)
-    {
-        return retValue;
-    }
-
-    // getting device on which to run the sample
-    // First, get the size of device list data
-    size_t deviceListSize = 0;
-
-    status = clGetContextInfo(
-                 context,
-                 CL_CONTEXT_DEVICES,
-                 0,
-                 NULL,
-                 &deviceListSize);
-    CHECK_OPENCL_ERROR(status, "clGetContextInfo failed.");
-
-    int deviceCount = (int)(deviceListSize / sizeof(cl_device_id));
-    deviceCount = deviceCount;
-
-    devices = (cl_device_id *)malloc(deviceListSize);
-    CHECK_ALLOCATION((devices), "Failed to allocate memory (devices).");
-
-    // Now, get the device list data
-    status = clGetContextInfo(context,
-                              CL_CONTEXT_DEVICES,
-                              deviceListSize,
-                              (devices),
-                              NULL);
-    CHECK_OPENCL_ERROR(status, "clGetGetContextInfo failed.");
-
-    if (dType == CL_DEVICE_TYPE_CPU)
-    {
-        interopDeviceId = devices[sampleArgs->deviceId];
-    }
-
-    // Create command queue
-    cl_command_queue_properties prop = 0;
-    commandQueue = clCreateCommandQueue(
-                       context,
-                       interopDeviceId,
-                       prop,
-                       &status);
-    CHECK_OPENCL_ERROR(status, "clCreateCommandQueue failed.");
-
-    /*
-     * Create texture object
-     */
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-
-    // Set parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, width, height, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    // Create output image buffer
-    outputImageBuffer = clCreateBuffer(context, 
-                                CL_MEM_WRITE_ONLY, 
-                                width * height * pixelSize, 
-                                NULL, 
-                                &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputImageBuffer)");
-
-    /*
-    * Create and initialize memory objects
-    */
-
-    // Set Persistent memory only for AMD platform
-    cl_mem_flags inMemFlags = CL_MEM_READ_ONLY;
-    if(sampleArgs->isAmdPlatform())
-    {
-        inMemFlags |= CL_MEM_USE_PERSISTENT_MEM_AMD;
-    }
-
-    // Create memory object for input Image
-    inputImageBuffer = clCreateBuffer(
-                           context,
-                           inMemFlags,
-                           width * height * pixelSize,
-                           NULL,
-                           &status);
-    CHECK_OPENCL_ERROR(status, "clCreateBuffer failed. (inputImageBuffer)");
-
-    // Set input data
-    cl_event writeEvt;
-    status = clEnqueueWriteBuffer(
-                 commandQueue,
-                 inputImageBuffer,
-                 CL_FALSE,
-                 0,
-                 width * height * pixelSize,
-                 inputImageData,
-                 0,
-                 NULL,
-                 &writeEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueWriteBuffer failed. (inputImageBuffer)");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&writeEvt);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(writeEvt) Failed");
-
-    // create a CL program using the kernel source
-    buildProgramData buildData;
-    buildData.kernelName = std::string("GaussianNoiseGL_Kernels.cl");
-    buildData.devices = devices;
-    buildData.deviceId = sampleArgs->deviceId;
-    buildData.flagsStr = std::string("");
-
-
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        buildData.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
-
-    if(sampleArgs->isLoadBinaryEnabled())
-    {
-
-        buildData.binaryName = std::string(sampleArgs->loadBinary.c_str());
-    }
-
-
-
-
-    buildProgramData buildData2;
-    buildData2.kernelName = std::string("GaussianNoiseGL_Kernels2.cl");
-    buildData2.devices = devices;
-    buildData2.deviceId = sampleArgs->deviceId;
-    buildData2.flagsStr = std::string("");
-
-    if(sampleArgs->isComplierFlagsSpecified())
-    {
-        buildData2.flagsFileName = std::string(sampleArgs->flags.c_str());
-    }
-    if(sampleArgs->isLoadBinaryEnabled())
-    {
-
-        buildData2.binaryName = std::string(sampleArgs->loadBinary.c_str());
-    }
-
-
-    cl_program program1;
-    cl_program program2;
-    retValue = compileOpenCLProgram(program1, context, buildData);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
-    std::string flagsStr = std::string(buildData.flagsStr.c_str());
-    retValue = compileOpenCLProgram(program2, context, buildData2);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "buildOpenCLProgram() failed");
-
-    retValue=
-        clCompileProgram(program1,
-                         0,
-                         0,
-                         flagsStr.c_str(),
-                         0,
-                         0,
-                         0,
-                         NULL,NULL);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "clCompileProgram() failed");
-    retValue=
-        clCompileProgram(program2,
-                         0,
-                         0,
-                         flagsStr.c_str(),
-                         0,
-                         0,
-                         0,
-                         NULL,NULL);
-    CHECK_ERROR(retValue, SDK_SUCCESS, "clCompileProgram() failed");
-
-    cl_program input_program[] = { program1 ,program2 };
-    program = clLinkProgram(context,
-                            0,
-                            0,
-                            0,
-                            2,
-                            input_program,
-                            NULL,
-                            NULL,
-                            &status
-                           );
-
-    CHECK_OPENCL_ERROR(status, "clLinkProgram failed.");
-
-    kernel = clCreateKernel(program,
-                            "gaussian_transform",
-                            &status);
-    CHECK_OPENCL_ERROR(status, "clCreateKernel failed.");
-
-
-    status =  kernelInfo.setKernelWorkGroupInfo(kernel,interopDeviceId);
-    CHECK_ERROR(status, SDK_SUCCESS, "setKErnelWorkGroupInfo() failed");
-
-    if((blockSizeX * blockSizeY) > kernelInfo.kernelWorkGroupSize)
-    {
-        if(!sampleArgs->quiet)
-        {
-            std::cout << "Out of Resources!" << std::endl;
-            std::cout << "Group Size specified : "
-                      << blockSizeX * blockSizeY << std::endl;
-            std::cout << "Max Group Size supported on the kernel : "
-                      << kernelInfo.kernelWorkGroupSize << std::endl;
-            std::cout << "Falling back to " << kernelInfo.kernelWorkGroupSize << std::endl;
-        }
-
-        // Three possible cases
-        if(blockSizeX > kernelInfo.kernelWorkGroupSize)
-        {
-            blockSizeX = kernelInfo.kernelWorkGroupSize;
-            blockSizeY = 1;
-        }
-    }
-    return SDK_SUCCESS;
-}
-
-int
-GaussianNoiseGL::runCLKernels()
-{
-    cl_int status;
-
-    status = clSetKernelArg(
-                 kernel,
-                 0,
-                 sizeof(cl_mem),
-                 &inputImageBuffer);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (inputImageBuffer)");
-
-    status = clSetKernelArg(
-                 kernel,
-                 1,
-                 sizeof(cl_mem),
-                 &outputImageBuffer);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (outputImageBuffer)");
-
-    status = clSetKernelArg(
-                 kernel,
-                 2,
-                 sizeof(int),
-                 &verfactor);
-    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (verfactor)");
-
-    size_t globalThreads[] = {width/2, height};
-
-    size_t localThreads[] = {blockSizeX, blockSizeY};
-
-    cl_event ndrEvt2;
-    status = clEnqueueNDRangeKernel(
-                 commandQueue,
-                 kernel,
-                 2,
-                 NULL,
-                 globalThreads,
-                 localThreads,
-                 0,
-                 NULL,
-                 &ndrEvt2);
-    CHECK_OPENCL_ERROR(status, "clEnqueueNDRangeKernel failed.");
-
-    status = clFlush(commandQueue);
-
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&ndrEvt2);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(ndrEvt2) Failed");
-
-    //read image to host buffer
-    cl_event readEvt;
-    size_t origin[3] = {0,0,0};
-    size_t region[3] = {width,height,1};
-    status = clEnqueueReadImage(
-                 commandQueue,
-                 outputImageBuffer,
-                 CL_FALSE,
-                 origin,
-                 region,
-                 width * pixelSize,
-                 0,
-                 outputImageData,
-                 0,
-                 NULL,
-                 &readEvt);
-    CHECK_OPENCL_ERROR(status, "clEnqueueReadImage failed.");
-
-    status = clFlush(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clFlush failed.");
-
-    status = waitForEventAndRelease(&readEvt);
-    CHECK_ERROR(status, SDK_SUCCESS, "WaitForEventAndRelease(readEvt) Failed");
-
-    return SDK_SUCCESS;
-}
-
-
-
-int
-GaussianNoiseGL::initialize()
-{
-    // Call base class Initialize to get default configuration
-    if(sampleArgs->initialize())
-    {
-        return SDK_FAILURE;
-    }
-
-    Option* iteration_option = new Option;
-    CHECK_ALLOCATION(iteration_option, "Memory Allocation error.\n");
-
-    iteration_option->_sVersion = "i";
-    iteration_option->_lVersion = "iterations";
-    iteration_option->_description = "Number of iterations to execute kernel";
-    iteration_option->_type = CA_ARG_INT;
-    iteration_option->_value = &iterations;
-
-    sampleArgs->AddOption(iteration_option);
-    delete iteration_option;
-
-
-
-    Option* factor_option = new Option;
-    if(!factor_option)
-    {
-        error("Memory Allocation error.\n");
-        return SDK_FAILURE;
-    }
-    factor_option->_sVersion = "f";
-    factor_option->_lVersion = "factor";
-    factor_option->_description = "Noise factor";
-    factor_option->_type = CA_ARG_INT;
-    factor_option->_value = &verfactor;
-
-    sampleArgs->AddOption(factor_option);
-    delete factor_option;
-
-
-
-    return SDK_SUCCESS;
-}
-
-int
-GaussianNoiseGL::setup()
-{
-    if(iterations < 1)
-    {
-        std::cout<<"Error, iterations cannot be 0 or negative. Exiting..\n";
-        exit(0);
-    }
-    // Allocate host memory and read input image
-    if(readInputImage(INPUT_IMAGE) != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
-
-    // create and initialize timers
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
-    cl_int retValue = setupCL();
-    if(retValue != SDK_SUCCESS)
-    {
-        if(retValue == SDK_EXPECTED_FAILURE)
-        {
-            return SDK_EXPECTED_FAILURE;
-        }
-        return SDK_FAILURE;
-    }
-
-    sampleTimer->stopTimer(timer);
-    // Compute set-up time
-    setupTime = (double)(sampleTimer->readTimer(timer));
-
-    return SDK_SUCCESS;
-
-}
-
-int
-GaussianNoiseGL::run()
-{
-
-    // Warm up
-    for(int i = 0; i < 2 && iterations != 1; i++)
-    {
-        // Set kernel arguments and run kernel
-        if(runCLKernels() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-    }
-
-    // create and initialize timers
-    int timer = sampleTimer->createTimer();
-    sampleTimer->resetTimer(timer);
-    sampleTimer->startTimer(timer);
-
-
-    std::cout << "Executing kernel for " << iterations <<
-              " iterations" <<std::endl;
-    std::cout << "-------------------------------------------" << std::endl;
-
-
-    for(int i = 0; i < iterations; i++)
-    {
-        // Set kernel arguments and run kernel
-        if(runCLKernels() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-    }
-
-    sampleTimer->stopTimer(timer);
-    // Compute kernel time
-    kernelTime = (double)(sampleTimer->readTimer(timer)) / iterations;
-
-    if(!sampleArgs->verify && !sampleArgs->quiet)
-    {
-        std::cout << "\nPress key w to increase the factor \n";
-        std::cout << "Press key s to decrease the factor \n";
-        std::cout << "Press ESC key to quit \n";
-#ifndef _WIN32
-        //glutMainLoop();
-        XSelectInput(displayNameSep,
-                     winSep,
-                     ExposureMask | KeyPressMask | ButtonPressMask);
-        while(1)
-        {
-            bool goOn = true;
-
-            t1 = clock() * CLOCKS_PER_SEC;
-            frameCount++;
-
-            // Execute the kernel
-            gaussianNoise->runCLKernels();
-
-            // Bind texture
-            glBindTexture(GL_TEXTURE_2D, tex);
-
-            if(outputImageData)
-                glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGBA, width, height, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, outputImageData);
-
-            // Display image using texture
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_LIGHTING);
-            glEnable(GL_TEXTURE_2D);
-            glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-
-            glMatrixMode(GL_PROJECTION);
-            glPushMatrix();
-            glLoadIdentity();
-            glOrtho(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
-
-            glMatrixMode( GL_MODELVIEW);
-            glLoadIdentity();
-
-            glViewport(0, 0, width, height);
-
-            glBegin(GL_QUADS);
-
-            glTexCoord2f(0.0, 0.0);
-            glVertex3f(-1.0, -1.0, 0.5);
-
-            glTexCoord2f(1.0, 0.0);
-            glVertex3f(1.0, -1.0, 0.5);
-
-            glTexCoord2f(1.0, 1.0);
-            glVertex3f(1.0, 1.0, 0.5);
-
-            glTexCoord2f(0.0, 1.0);
-            glVertex3f(-1.0, 1.0, 0.5);
-
-            glEnd();
-
-            glMatrixMode(GL_PROJECTION);
-            glPopMatrix();
-
-            glDisable(GL_TEXTURE_2D);
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-            glXSwapBuffers (displayNameSep, winSep);
-
-            t2 = clock() * CLOCKS_PER_SEC;
-            totalElapsedTime += (double)(t2 - t1);
-            if(frameCount && frameCount > frameRefCount)
-            {
-                // set GLUT Window Title
-                char title[256];
-                double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) /
-                                      (double) frameCount);
-                int framesPerSec = (int)(1.0 / (fMs / CLOCKS_PER_SEC));
-#if defined (_WIN32) && !defined(__MINGW32__)
-                sprintf_s(title, 256, "GaussianNoiseGL | %d fps ", framesPerSec);
 #else
-                sprintf(title, "GaussianNoiseGL | %d fps ", framesPerSec);
+
+	// Nothing special need to be done here
+
 #endif
-                //glutSetWindowTitle(title);
-                frameCount = 0;
-                totalElapsedTime = 0.0;
-                XStoreName(displayNameSep, winSep, title);
-            }
 
-            /* handle the events in the queue */
-            while (goOn)
-            {
-                if(XPending(displayNameSep)<=0)
-                {
-                    break;
-                }
-                XNextEvent(displayNameSep, &xevSep);
-                switch(xevSep.type)
-                {
-                    /* exit in case of a mouse button press */
-                case ButtonPress:
-                    if (xevSep.xbutton.button == Button2)
-                    {
-                        goOn = false;
-                    }
-                    break;
-                case KeyPress:
-                    char buf[2];
-                    int len;
-                    KeySym keysym_return;
-                    len = XLookupString(&xevSep.xkey,
-                                        buf,
-                                        1,
-                                        &keysym_return,
-                                        NULL);
-                    if (len != 0)
-                    {
-                        if(buf[0] == (char)(27))//Escape character
-                        {
-                            goOn = false;
-                        }
-                        else if ((buf[0] == 'w') || (buf[0] == 'W'))
-                        {
+    size_t globalThreads[] = {Width/2, Height};
+    size_t localThreads[] = {BlockSize[0], BlockSize[1]};
 
-                            verfactor += 2;
-                        }
-                        else if ((buf[0] == 's') || (buf[0] == 'S'))
-                        {
+#if (DEBUG_INFO)
+	if(FrameCount <= 1)
+		printf("Global[%4d %4d] Local[%4d %4d]\n", 
+			(int)global[0], (int)global[1],
+			(int)local[0], (int)local[1]);
+#endif
 
-                            verfactor -=2;
-                        }
-                    }
-                    break;
-                }
-            }
-            if(!goOn)
-            {
-                break;
-            }
-        }
+	err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 2, NULL, globalThreads, localThreads, 0, NULL, NULL);
+	if (err)
+	{
+		printf("Failed to enqueue kernel! %d\n", err);
+		return err;
+	}
+
+#if (USE_GL_ATTACHMENTS)
+
+	// Return control to GL context, data already in texture
+	err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to release GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
+
 #else
-        while(!quit)
-        {
-            if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
-            {
-                // handle or dispatch messages
-                if (msg.message == WM_QUIT)
-                {
-                    quit = TRUE;
-                }
-                else
-                {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                }
+	// Need to explicitly copy to host side for later rendering
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeOutputImage, CL_TRUE, 0, Width * Height * TextureTypeSize * 4, HostImageBuffer, 0, NULL, NULL );      
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to read buffer! %d\n", err);
+		return EXIT_FAILURE;
+	}
 
-            }
-            else
-            {
-                t1 = clock() * CLOCKS_PER_SEC;
-                frameCount++;
+#endif	
 
-                // Execute the kernel
-                gaussianNoise->runCLKernels();
+	return CL_SUCCESS;
+}
 
-                // Bind  texture
-                glBindTexture(GL_TEXTURE_2D, tex);
+////////////////////////////////////////////////////////////////////////////////
 
-                // Display image using texture
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_LIGHTING);
-                glEnable(GL_TEXTURE_2D);
-                glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+static int 
+CreateComputeBuffers(void)
+{
 
-                glMatrixMode(GL_PROJECTION);
-                glPushMatrix();
-                glLoadIdentity();
-                glOrtho(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
+#if (USE_GL_ATTACHMENTS)
+	int err = 0;
 
-                glMatrixMode( GL_MODELVIEW);
-                glLoadIdentity();
+	if(ComputeOutputImage)
+		clReleaseMemObject(ComputeOutputImage);
+	ComputeOutputImage = 0;
 
-                glViewport(0, 0, width, height);
+	printf("Allocating compute result image in device memory...\n");
+	ComputeOutputImage = clCreateFromGLTexture(ComputeContext, CL_MEM_WRITE_ONLY, TextureTarget, 0, TextureId, &err);
+	if (!ComputeOutputImage || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL texture reference! %d\n", err);
+		return -1;
+	}
 
-                glBegin(GL_QUADS);
-
-                glTexCoord2f(0.0, 0.0);
-                glVertex3f(-1.0, -1.0, 0.5);
-
-                glTexCoord2f(1.0, 0.0);
-                glVertex3f(1.0, -1.0, 0.5);
-
-                glTexCoord2f(1.0, 1.0);
-                glVertex3f(1.0, 1.0, 0.5);
-
-                glTexCoord2f(0.0, 1.0);
-                glVertex3f(-1.0, 1.0, 0.5);
-
-                glEnd();
-
-                glMatrixMode(GL_PROJECTION);
-                glPopMatrix();
-
-                glDisable(GL_TEXTURE_2D);
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-                SwapBuffers(gHdc);
-
-                t2 = clock() * CLOCKS_PER_SEC;
-                totalElapsedTime += (double)(t2 - t1);
-                if(frameCount && frameCount > frameRefCount)
-                {
-                    // set GLUT Window Title
-                    char title[256];
-                    double fMs = (double)((totalElapsedTime / (double)CLOCKS_PER_SEC) /
-                                          (double) frameCount);
-                    int framesPerSec = (int)(1.0 / (fMs / CLOCKS_PER_SEC));
-#if defined (_WIN32) && !defined(__MINGW32__)
-                    sprintf_s(title, 256, "GaussianNoiseGL | %d fps ", framesPerSec);
 #else
-                    sprintf(title, "GaussianNoiseGL | %d fps ", framesPerSec);
-#endif
-                    //glutSetWindowTitle(title);
-                    frameCount = 0;
-                    totalElapsedTime = 0.0;
-                    SetWindowText(gHwnd, title);
-                }
 
-            }
-        }
-#endif
-    }
+	if (HostImageBuffer)
+		free(HostImageBuffer);
 
-    // write the output image to bitmap file
-    if(writeOutputImage(OUTPUT_SEPARABLE_IMAGE) != SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
+	printf("Allocating compute result image in host memory...\n");
+	HostImageBuffer = malloc(TextureWidth * TextureHeight * TextureTypeSize * 4);
+	if(!HostImageBuffer)
+	{
+		printf("Failed to create host image buffer!\n");
+		return -1;
+	}
 
-    return SDK_SUCCESS;
-}
+	memset(HostImageBuffer, 0, TextureWidth * TextureHeight * TextureTypeSize * 4);
 
-int
-GaussianNoiseGL::cleanup()
-{
-#ifdef _WIN32
-    wglDeleteContext(gGlCtx);
-    DeleteDC(gHdc);
-    gHdc = NULL;
-    gGlCtx = NULL;
-    DestroyWindow(gHwnd);
 #endif
 
-    // Releases OpenCL resources (Context, Memory etc.)
-    cl_int status;
+	if(ComputeInputImage)
+		clReleaseMemObject(ComputeInputImage);
+	ComputeInputImage = 0;
 
+	ComputeInputImage = clCreateBuffer(ComputeContext, CL_MEM_READ_ONLY, TextureTypeSize * 4 * TextureWidth * TextureHeight, NULL, NULL);
+	if (!ComputeInputImage)
+	{
+		printf("Failed to create OpenCL array!\n");
+		return -1;
+	}
 
-    status = clReleaseKernel(kernel);
-    CHECK_OPENCL_ERROR(status, "clReleaseKernel failed.");
+	return CL_SUCCESS;
+}
 
-    status = clReleaseProgram(program);
-    CHECK_OPENCL_ERROR(status, "clReleaseProgram failed.");
+static int 
+SetupComputeDevices(int gpu)
+{
+	int err;
+	size_t returned_size;
+	ComputeDeviceType = gpu ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
 
-    status = clReleaseMemObject(inputImageBuffer);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.");
+#if (USE_GL_ATTACHMENTS)
 
-    status = clReleaseMemObject(outputImageBuffer);
-    CHECK_OPENCL_ERROR(status, "clReleaseMemObject failed.");
+	printf(SEPARATOR);
+	printf("Using active OpenGL context...\n");
 
-#ifndef _WIN32
-    glXMakeCurrent(displayNameSep, None, NULL);
-    glXDestroyContext(displayNameSep, gGlCtxSep);
-    glDeleteTextures(1, &tex);
-    XDestroyWindow(displayNameSep, winSep);
-    XCloseDisplay(displayNameSep);
+    // Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Create a context  
+	cl_context_properties properties[] =
+	{
+		CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
+		CL_GLX_DISPLAY_KHR, (cl_context_properties)glXGetCurrentDisplay(),
+		CL_CONTEXT_PLATFORM, (cl_context_properties)(platform_id),
+		0
+	};
+
+    // Create a context from a CGL share group
+    //
+	ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
+#else
+
+    // Bind to platform
+	cl_platform_id platform_id;
+
+	cl_uint numPlatforms;
+	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+	if (status != CL_SUCCESS)
+	{
+		printf("clGetPlatformIDs Failed\n");
+		return EXIT_FAILURE;
+	}
+
+	if (0 < numPlatforms)
+	{
+		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+
+		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+
+		char platformName[100];
+		for (unsigned i = 0; i < numPlatforms; ++i)
+		{
+			status = clGetPlatformInfo(platforms[i],
+				CL_PLATFORM_VENDOR,
+				sizeof(platformName),
+				platformName,
+				NULL);
+			platform_id = platforms[i];
+			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+			{
+				break;
+			}
+		}
+		printf("Platform found : %s\n", platformName);
+		free(platforms);
+	}
+	if(NULL == platform_id)
+	{
+		printf("NULL platform found so Exiting Application.\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get ID for the device
+	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Create a context containing the compute device(s)
+    //
+	ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
+	if (!ComputeContext)
+	{
+		printf("Error: Failed to create a compute context!\n");
+		return EXIT_FAILURE;
+	}
+
 #endif
 
-    status = clReleaseCommandQueue(commandQueue);
-    CHECK_OPENCL_ERROR(status, "clReleaseCommandQueue failed.");
+	unsigned int device_count;
+	cl_device_id device_ids[16];
 
-    status = clReleaseContext(context);
-    CHECK_OPENCL_ERROR(status, "clReleaseContext failed.");
+	err = clGetContextInfo(ComputeContext, CL_CONTEXT_DEVICES, sizeof(device_ids), device_ids, &returned_size);
+	if(err)
+	{
+		printf("Error: Failed to retrieve compute devices for context!\n");
+		return EXIT_FAILURE;
+	}
 
-    // release program resources (input memory etc.)
-    FREE(inputImageData);
+	device_count = returned_size / sizeof(cl_device_id);
 
-    FREE(outputImageData);
+	unsigned int i = 0;
+	int device_found = 0;
+	cl_device_type device_type; 
+	for(i = 0; i < device_count; i++) 
+	{
+		clGetDeviceInfo(device_ids[i], CL_DEVICE_TYPE, sizeof(cl_device_type), &device_type, NULL);
+		if(device_type == ComputeDeviceType) 
+		{
+			ComputeDeviceId = device_ids[i];
+			device_found = 1;
+			break;
+		}   
+	}
 
-    FREE(devices);
+	if(!device_found)
+	{
+		printf("Error: Failed to locate compute device!\n");
+		return EXIT_FAILURE;
+	}
 
-    return SDK_SUCCESS;
+    // Create a command queue
+    //
+	ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
+	if (!ComputeCommands)
+	{
+		printf("Error: Failed to create a command queue!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Report the device vendor and device name
+    // 
+	cl_char vendor_name[1024] = {0};
+	cl_char device_name[1024] = {0};
+	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
+	err|= clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_NAME, sizeof(device_name), device_name, &returned_size);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve device info!\n");
+		return EXIT_FAILURE;
+	}
+
+	printf(SEPARATOR);
+	printf("Connecting to %s %s...\n", vendor_name, device_name);
+
+	return CL_SUCCESS;
 }
 
-
-
-void
-GaussianNoiseGL::GaussianNoiseCPUReference()
+static int 
+SetupComputeKernel(void)
 {
+	int err = 0;
+	char *source = 0;
+	size_t length = 0;
+
+	if(ComputeKernel)
+		clReleaseKernel(ComputeKernel);    
+	ComputeKernel = 0;
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// Program 1
+	if(ComputeProgram1)
+		clReleaseProgram(ComputeProgram1);
+	ComputeProgram1 = 0;
+
+	printf(SEPARATOR);
+	printf("Loading kernel source from file '%s'...\n", COMPUTE_KERNEL_FILENAME_1);    
+	err = LoadTextFromFile(COMPUTE_KERNEL_FILENAME_1, &source, &length);
+	if (!source || err)
+	{
+		printf("Error: Failed to load kernel source 1!\n");
+		return EXIT_FAILURE;
+	}
+
+	// Create the compute program from the source buffer
+	//
+	ComputeProgram1 = clCreateProgramWithSource(ComputeContext, 1, (const char**)&source, NULL, &err);
+	if (!ComputeProgram1 || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute program 1!\n");
+		return EXIT_FAILURE;
+	}
+	free(source);
+
+	err = clCompileProgram(ComputeProgram1, 0, 0, 0, 0, 0, 0, NULL, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to compile compute program 1!\n");
+		return EXIT_FAILURE;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// Program 2
+	if(ComputeProgram2)
+		clReleaseProgram(ComputeProgram2);
+	ComputeProgram2 = 0;
+
+	printf(SEPARATOR);
+	printf("Loading kernel source from file '%s'...\n", COMPUTE_KERNEL_FILENAME_2);    
+	err = LoadTextFromFile(COMPUTE_KERNEL_FILENAME_2, &source, &length);
+	if (!source || err)
+	{
+		printf("Error: Failed to load kernel source 2!\n");
+		return EXIT_FAILURE;
+	}
+
+	// Create the compute program from the source buffer
+	//
+	ComputeProgram2 = clCreateProgramWithSource(ComputeContext, 1, (const char**)&source, NULL, &err);
+	if (!ComputeProgram2 || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute program 2!\n");
+		return EXIT_FAILURE;
+	}
+	free(source);
+
+	err = clCompileProgram(ComputeProgram2, 0, 0, 0, 0, 0, 0, NULL, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to compile compute program 2!\n");
+		return EXIT_FAILURE;
+	}
+
+	cl_program Programs[] = { ComputeProgram1, ComputeProgram2};
+	ComputeProgram = clLinkProgram(ComputeContext,
+									0,
+									0,
+									0,
+									2,
+									Programs,
+									NULL,
+									NULL,
+									&err
+									);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to link compute programs!\n");
+		return EXIT_FAILURE;
+	}
+
+
+    // Create the compute kernel from within the program
+    //
+	printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_METHOD_NAME);    
+	ComputeKernel = clCreateKernel(ComputeProgram, COMPUTE_KERNEL_METHOD_NAME, &err);
+	if (!ComputeKernel || err != CL_SUCCESS)
+	{
+		printf("Error: Failed to create compute kernel!\n");
+		return EXIT_FAILURE;
+	}
+
+    // Get the maximum work group size for executing the kernel on the device
+    //
+	err = clGetKernelWorkGroupInfo(ComputeKernel, ComputeDeviceId, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &MaxBlockSize, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Error: Failed to retrieve kernel work group info! %d\n", err);
+		exit(1);
+	}
+
+#if (DEBUG_INFO)
+	printf("MaxBlockSize: %d\n", MaxBlockSize);
+#endif
+
+	BlockSize[0] = GROUP_SIZE;
+	BlockSize[1] = 1;
+
+	if (BlockSize[0] * BlockSize[1] > MaxBlockSize)
+	{
+		BlockSize[0] = MaxBlockSize;
+		BlockSize[1] = 1;
+	}
+
+	printf(SEPARATOR);
+
+	return CL_SUCCESS;
 
 }
 
-
-int
-GaussianNoiseGL::verifyResults()
+static void
+Cleanup(void)
 {
+	clFinish(ComputeCommands);
+	clReleaseKernel(ComputeKernel);
+	clReleaseProgram(ComputeProgram);
+	clReleaseCommandQueue(ComputeCommands);
+	clReleaseMemObject(ComputeOutputImage);
+	clReleaseMemObject(ComputeInputImage);
+	clReleaseContext(ComputeContext);
 
-
-    if(sampleArgs->verify)
-    {
-
-
-        float mean = 0;
-        for(int i = 0; i < (int)(width * height); i++)
-        {
-            mean += outputImageData[i].s[0] - inputImageData[i].s[0];
-        }
-        mean /= (width * height * factor);
-
-        if(fabs(mean) < 0.1)
-        {
-            std::cout << "Passed! \n" << std::endl;
-            return SDK_SUCCESS;
-        }
-        else
-        {
-            std::cout << "Failed! \n" << std::endl;
-            return SDK_FAILURE;
-        }
-    }
-
-    return SDK_SUCCESS;
+	ComputeCommands = 0;
+	ComputeKernel = 0;
+	ComputeProgram = 0;    
+	ComputeOutputImage = 0;
+	ComputeInputImage = 0;
+	ComputeContext = 0;
 }
 
-void
-GaussianNoiseGL::printStats()
+static void
+Shutdown(void)
 {
-    if(sampleArgs->timing)
-    {
-        std::string strArray[4] =
-        {
-            "Width",
-            "Height",
-            "Time(sec)",
-            "kernelTime(sec)"
-        };
-        std::string stats[4];
-
-        sampleTimer->totalTime = setupTime + kernelTime;
-
-        stats[0] = toString(width, std::dec);
-        stats[1] = toString(height, std::dec);
-        stats[2] = toString(sampleTimer->totalTime, std::dec);
-        stats[3] = toString(kernelTime, std::dec);
-
-        printStatistics(strArray, stats, 4);
-    }
+	if (EnableOutput)
+		fclose(fp);
+	printf(SEPARATOR);
+	printf("Shutting down...\n");
+	Cleanup();
+	exit(0);
 }
 
-// Initialize the value to NULL
-GaussianNoiseGL *GaussianNoiseGL::gaussianNoise = NULL;
-namespace appsdk
+////////////////////////////////////////////////////////////////////////////////
+
+static int 
+SetupGraphics(void)
 {
+	CreateTexture(Width, Height);
 
+	glClearColor (0.0, 0.0, 0.0, 0.0);
 
-int
-compileOpenCLProgram(cl_program &program, const cl_context& context,
-                     buildProgramData &buildData)
+	glDisable(GL_DEPTH_TEST);
+	glActiveTexture(GL_TEXTURE0);
+	glViewport(0, 0, Width, Height);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+
+	TexCoords[3][0] = 0.0f;
+	TexCoords[3][1] = 0.0f;
+	TexCoords[2][0] = Width;
+	TexCoords[2][1] = 0.0f;
+	TexCoords[1][0] = Width;
+	TexCoords[1][1] = Height;
+	TexCoords[0][0] = 0.0f;
+	TexCoords[0][1] = Height;
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, VertexPos);
+	glClientActiveTexture(GL_TEXTURE0);
+	glTexCoordPointer(2, GL_FLOAT, 0, TexCoords);
+	return GL_NO_ERROR;
+}
+
+static int 
+Initialize(int gpu)
 {
-    cl_int status = CL_SUCCESS;
-    SDKFile kernelFile;
-    std::string kernelPath = getPath();
+	int err;
 
-    std::string flagsStr = std::string(buildData.flagsStr.c_str());
+	err = SetupGraphics();
+	if (err != GL_NO_ERROR)
+	{
+		printf ("Failed to setup OpenGL state!");
+		exit (err);
+	}
 
-    // Get additional options
-    if(buildData.flagsFileName.size() != 0)
-    {
-        SDKFile flagsFile;
-        std::string flagsPath = getPath();
-        flagsPath.append(buildData.flagsFileName.c_str());
-        if(!flagsFile.open(flagsPath.c_str()))
-        {
-            std::cout << "Failed to load flags file: " << flagsPath << std::endl;
-            return SDK_FAILURE;
-        }
-        flagsFile.replaceNewlineWithSpaces();
-        const char * flags = flagsFile.source().c_str();
-        flagsStr.append(flags);
-    }
+	err = SetupComputeDevices(gpu);
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to connect to compute device! Error %d\n", err);
+		exit (err);
+	}
 
-    if(flagsStr.size() != 0)
-    {
-        std::cout << "Build Options are : " << flagsStr.c_str() << std::endl;
-    }
+	cl_bool image_support;
+	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_IMAGE_SUPPORT,
+		sizeof(image_support), &image_support, NULL);
+	if (err != CL_SUCCESS) {
+		printf("Unable to query device for image support");
+		exit(err);
+	}
+	if (image_support == CL_FALSE) {
+		printf("Qjulia requires images: Images not supported on this device.");
+		return CL_IMAGE_FORMAT_NOT_SUPPORTED;
+	}
 
-    buildData.flagsStr = std::string(flagsStr.c_str());
+	err = SetupComputeKernel();
+	if (err != CL_SUCCESS)
+	{
+		printf ("Failed to setup compute kernel! Error %d\n", err);
+		exit (err);
+	}
 
+	err = CreateComputeBuffers();
+	if(err != CL_SUCCESS)
+	{
+		printf ("Failed to create compute result! Error %d\n", err);
+		exit (err);
+	}
 
-    if(buildData.binaryName.size() != 0)
-    {
-
-        std::cout << "can not support --load ! clCreateProgramWithSource" << std::endl;
-    }
-
-    kernelPath.append(buildData.kernelName.c_str());
-    if(!kernelFile.open(kernelPath.c_str()))//bool
-    {
-        std::cout << "Failed to load kernel file: " << kernelPath << std::endl;
-        return SDK_FAILURE;
-    }
-    const char * source = kernelFile.source().c_str();
-    size_t sourceSize[] = {strlen(source)};
-    program = clCreateProgramWithSource(context,
-                                        1,
-                                        &source,
-                                        sourceSize,
-                                        &status);
-    CHECK_OPENCL_ERROR(status, "clCreateProgramWithSource failed.");
-
-
-
-    return SDK_SUCCESS;
+	return CL_SUCCESS;
 }
 
 
-}
-
-int
-main(int argc, char *argv[])
+static void
+ReportInfo(void)
 {
-    GaussianNoiseGL clGaussianNoise;
-    GaussianNoiseGL::gaussianNoise = &clGaussianNoise;
+	if(ShowStats)
+	{
+		int iX = 20;
+		int iY = 20;
 
-    if(clGaussianNoise.initialize()!= SDK_SUCCESS)
-    {
-        return SDK_FAILURE;
-    }
+		DrawText(iX - 1, Height - iY - 1, 0, StatsString);
+		DrawText(iX - 2, Height - iY - 2, 0, StatsString);
+		DrawText(iX, Height - iY, 1, StatsString);
+	}
 
-    if(clGaussianNoise.sampleArgs->parseCommandLine(argc, argv))
-    {
-        return SDK_FAILURE;
-    }
+	if(ShowInfo)
+	{
+		int iX = TextOffset[0];
+		int iY = Height - TextOffset[1];
 
-    if(clGaussianNoise.sampleArgs->isDumpBinaryEnabled())
-    {
-        //return clGaussianNoise.genBinaryImage();
-        std::cout << "can not support --dump !" << std::endl;
+		DrawText(Width - iX - 1 - strlen(InfoString) * 10, Height - iY - 1, 0, InfoString);
+		DrawText(Width - iX - 2 - strlen(InfoString) * 10, Height - iY - 2, 0, InfoString);
+		DrawText(Width - iX - strlen(InfoString) * 10, Height - iY, 1, InfoString);
 
-    }
-    else
-    {
-        if(clGaussianNoise.setup() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-
-        if(clGaussianNoise.run() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-
-        if(clGaussianNoise.verifyResults() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-
-        if(clGaussianNoise.cleanup() != SDK_SUCCESS)
-        {
-            return SDK_FAILURE;
-        }
-
-        clGaussianNoise.printStats();
-    }
-
-    return SDK_SUCCESS;
+		ShowInfo = (ShowInfo > 200) ? 0 : ShowInfo + 1;
+	}
 }
 
+static void 
+ReportStats(
+	uint64_t uiStartTime, uint64_t uiEndTime)
+{
+	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
+
+	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
+	{
+		double fMs = (TimeElapsed / (double) FrameCount);
+		double fFps = 1.0 / (fMs / 1000.0);
+
+		sprintf(StatsString, "[%s] Compute: %3.2f ms  Display: %3.2f fps (%s)\n", 
+			(ComputeDeviceType == CL_DEVICE_TYPE_GPU) ? "GPU" : "CPU", 
+			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
+
+		glutSetWindowTitle(StatsString);
+		if (EnableOutput)
+			fprintf(fp, "%s\n", StatsString);
+		FrameCount = 0;
+		TimeElapsed = 0;
+	}    
+}
+
+static void
+Display_(void)
+{
+	FrameCount++;
+	uint64_t uiStartTime = GetCurrentTime();
+
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+	glClear (GL_COLOR_BUFFER_BIT);
+
+	if(Animated)
+	{
+
+	}
+
+	int err = Recompute();
+	if (err != 0)
+	{
+		printf("Error %d from Recompute!\n", err);
+		exit(1);
+	}
+
+	RenderTexture(HostImageBuffer);
+	ReportInfo();
+
+    glFinish(); // for timing
+    
+    uint64_t uiEndTime = GetCurrentTime();
+    ReportStats(uiStartTime, uiEndTime);
+    DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+    glutSwapBuffers();
+}
+
+static void 
+Reshape (int w, int h)
+{
+	glViewport(0, 0, w, h);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glClear(GL_COLOR_BUFFER_BIT);
+	glutSwapBuffers();
+
+	if(w > 2 * Width || h > 2 * Height)
+	{
+		Width = w;
+		Height = h;
+		Cleanup();
+		if(Initialize(ComputeDeviceType == CL_DEVICE_TYPE_GPU) != GL_NO_ERROR)
+			Shutdown();
+	}
+
+	Width = w;
+	Height = h;    
+}
+
+void Keyboard( unsigned char key, int x, int y )
+{
+	switch( key )
+	{
+		case 27:
+		exit(0);
+		break;
+
+		case ' ':
+		Animated = !Animated;
+		sprintf(InfoString, "Animated = %s\n", Animated ? "true" : "false");
+		ShowInfo = 1;
+		break;
+
+		case 'i':
+		ShowInfo = ShowInfo > 0 ? 0 : 1;
+		break;
+
+		case 's':
+		ShowStats = ShowStats > 0 ? 0 : 1;
+		break;
+
+		case '+':
+		VarFactor += 2;
+		break;
+
+		case '-':
+		VarFactor -= 2;
+		break;
+
+		case 'f':
+		glutFullScreen(); 
+		break;
+
+	}
+	Update = 1;
+	glutPostRedisplay();
+}
+
+void Idle(void)
+{
+	glutPostRedisplay();
+}
+
+int main(int argc, char** argv)
+{
+    // Parse command line options
+    //
+	int i;
+	int err;
+	int use_gpu = 1;
+	for( i = 0; i < argc && argv; i++)
+	{
+		if(!argv[i])
+			continue;
+
+		if(strstr(argv[i], "-cpu"))
+			use_gpu = 0;        
+
+		else if(strstr(argv[i], "-gpu"))
+			use_gpu = 1;
+
+		else if(strstr(argv[i], "-output"))
+		{
+			EnableOutput = 1;
+			fp = fopen(argv[i+1], "w+");
+		}
+	}
+
+	err = InitData();
+	if (err != CL_SUCCESS)
+	{
+		printf("Fail to init data\n");
+		exit(err);
+	}
+
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+	glutInitWindowSize (Width, Height);
+	glutInitWindowPosition (100, 100);
+	glutCreateWindow (argv[0]);
+	if (Initialize (use_gpu) == GL_NO_ERROR)
+	{
+		glutDisplayFunc(Display_);
+		glutIdleFunc(Idle);
+		glutReshapeFunc(Reshape);
+		glutKeyboardFunc(Keyboard);
+
+		atexit(Shutdown);
+		printf("Starting event loop...\n");
+
+		glutMainLoop();
+	}
+
+	return 0;
+}
 

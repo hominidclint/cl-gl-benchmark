@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
-#include <GL/gl.h>
+#include <GL/glew.h>
 #include <GL/glx.h>
 #include <GL/freeglut.h>
 #include <CL/cl.h>
@@ -32,7 +32,7 @@ using namespace appsdk;
 ////////////////////////////////////////////////////////////////////////////////
 
 #define USE_GL_ATTACHMENTS              (0)  // enable OpenGL attachments for Compute results
-#define DEBUG_INFO                      (0)     
+#define DEBUG_INFO                      (1)     
 #define COMPUTE_KERNEL_FILENAME_1       ("GaussianNoiseGL_Kernels.cl")
 #define COMPUTE_KERNEL_FILENAME_2       ("GaussianNoiseGL_Kernels2.cl")
 #define COMPUTE_KERNEL_METHOD_NAME      ("gaussian_transform")
@@ -41,6 +41,7 @@ using namespace appsdk;
 ////////////////////////////////////////////////////////////////////////////////
 
 #define INPUT_IMAGE                     ("GaussianNoiseGL_Input.bmp")
+#define OUTPUT_IMAGE                    ("GaussianNoiseGL_Output.bmp")
 
 #define GROUP_SIZE                      (64)
 #define FACTOR                          (60)
@@ -65,10 +66,12 @@ static cl_mem                           ComputeInputImage;
 static cl_mem                           ComputeOutputImage;
 static size_t                           MaxBlockSize;
 static size_t                           BlockSize[2];
+static unsigned int                     NDRangeCount = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static int VarFactor                    = 60;
+static int VarFactor                    = FACTOR;
+static int Incre                        = 2;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -87,9 +90,7 @@ static uint TextureFormat               = GL_RGBA;
 static uint TextureType                 = GL_UNSIGNED_BYTE;
 static uint TextureWidth                = 0;
 static uint TextureHeight               = 0;
-static size_t TextureTypeSize           = sizeof(unsigned char);
 static uint ActiveTextureUnit           = GL_TEXTURE1_ARB;
-static void* HostImageBuffer            = 0;
 
 static double TimeElapsed               = 0;
 static int FrameCount                   = 0;
@@ -258,6 +259,21 @@ static int ReadInputImage(const char *file_name)
 	return 1;
 }
 
+static int WriteOutputImage(const char *file_name)
+{
+    // copy output image data back to original pixel data
+    memcpy(PixelData, OutputImageData, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write(file_name))
+    {
+        error("Failed to write output image!");
+        return -1;
+    }
+
+    return 1;
+
+}
 static int InitData()
 {
 	int err;
@@ -271,12 +287,6 @@ static int InitData()
 	Height = InputBitmap.getHeight();
 	TextureWidth = Width;
 	TextureHeight = Height;
-
-#if (DEBUG_INFO)
-
-	printf("Image Height = %d, Width = %d\n");
-
-#endif
 
     // Allocate memory for input & output image data
 	if (InputImageData)
@@ -312,10 +322,23 @@ static int InitData()
     // Copy pixel data into InputImageData
 	memcpy(InputImageData, PixelData, Width * Height * PixelSize);
 
+
+#if (DEBUG_INFO)
+    // copy output image data back to original pixel data
+    memcpy(PixelData, InputImageData, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("AfterInputRead.bmp"))
+    {
+        error("Failed to write output image!");
+        return -1;
+    }
+#endif
+
 	return CL_SUCCESS;
 }
 
-static void 
+static void
 CreateTexture(uint width, uint height)
 {    
 	if(TextureId)
@@ -328,10 +351,11 @@ CreateTexture(uint width, uint height)
 	TextureHeight = height;
 
 	glActiveTextureARB(ActiveTextureUnit);
+	glEnable(TextureTarget);	
 	glGenTextures(1, &TextureId);
 	glBindTexture(TextureTarget, TextureId);
-	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP);
-	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(TextureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(TextureTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(TextureTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexImage2D(TextureTarget, 0, TextureInternal, TextureWidth, TextureHeight, 0, 
@@ -342,42 +366,51 @@ CreateTexture(uint width, uint height)
 static void 
 RenderTexture( void *pvData )
 {
-	glDisable( GL_LIGHTING );
-
-	glViewport( 0, 0, Width, Height );
-
-	glMatrixMode( GL_PROJECTION );
-	glLoadIdentity();
-	gluOrtho2D( -1.0, 1.0, -1.0, 1.0 );
-
-	glMatrixMode( GL_MODELVIEW );
-	glLoadIdentity();
-
-	glMatrixMode( GL_TEXTURE );
-	glLoadIdentity();
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+	glClear (GL_COLOR_BUFFER_BIT);
 
 	glEnable( TextureTarget );
 	glBindTexture( TextureTarget, TextureId );
 
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
+
+    glMatrixMode( GL_MODELVIEW);
+    glLoadIdentity();
+
+    glViewport(0, 0, Width, Height);
+
+#if (USE_GL_ATTACHMENTS)
+	// Already in GPU memory, just need to render
+#else
+	// Need to copy to texture
 	if(pvData)
 		glTexSubImage2D(TextureTarget, 0, 0, 0, TextureWidth, TextureHeight, 
 			TextureFormat, TextureType, pvData);
+#endif
 
 	glTexParameteri(TextureTarget, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
 	glBegin( GL_QUADS );
 	{
 		glColor3f(1.0f, 1.0f, 1.0f);
 		glTexCoord2f( 0.0f, 0.0f );
-		glVertex3f( -1.0f, -1.0f, 0.0f );
+		glVertex3f( -1.0f, -1.0f, 0.5f );
 
 		glTexCoord2f( 0.0f, 1.0f );
-		glVertex3f( -1.0f, 1.0f, 0.0f );
+		glVertex3f( -1.0f, 1.0f, 0.5f );
 
 		glTexCoord2f( 1.0f, 1.0f );
-		glVertex3f( 1.0f, 1.0f, 0.0f );
+		glVertex3f( 1.0f, 1.0f, 0.5f );
 
 		glTexCoord2f( 1.0f, 0.0f );
-		glVertex3f( 1.0f, -1.0f, 0.0f );
+		glVertex3f( 1.0f, -1.0f, 0.5f );
 	}
 	glEnd();
 	glBindTexture( TextureTarget, 0 );
@@ -387,13 +420,32 @@ RenderTexture( void *pvData )
 static int
 Recompute(void)
 {
+	glFinish();
+
 	if(!ComputeKernel || !ComputeOutputImage)
 		return CL_SUCCESS;
+
+	int err = 0;
+
+#if (USE_GL_ATTACHMENTS)
+
+	// Get control from GL context
+	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to acquire GL object! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
+
+#else
+
+	// Nothing needs to be done here
+
+#endif
 
 	void *values[3];
 	size_t sizes[3];
 
-	int err = 0;
 	unsigned int v = 0, s = 0, a = 0;
 	values[v++] = &ComputeInputImage;
 	values[v++] = &ComputeOutputImage;
@@ -414,21 +466,51 @@ Recompute(void)
 			return -10;
 	}
 
-#if (USE_GL_ATTACHMENTS)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if (DEBUG_INFO)
+	glFinish();
 
-	// Get control from GL context
-	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	cl_uchar4 *InputDataReadBack = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+	cl_uchar4 *OutputDataReadBack = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeInputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, InputDataReadBack, 0, NULL, NULL);      
 	if (err != CL_SUCCESS)
 	{
-		printf("Failed to acquire GL object! %d\n", err);
+		printf("%s: Failed to read input image buffer! %d\n", __FUNCTION__, err);
 		return EXIT_FAILURE;
 	}
 
-#else
+	err = clEnqueueReadBuffer(ComputeCommands, ComputeOutputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, OutputDataReadBack, 0, NULL, NULL);      
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to read output image buffer! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
 
-	// Nothing special need to be done here
+    // copy output image data back to original pixel data
+    memcpy(PixelData, InputDataReadBack, Width * Height * PixelSize);
 
+    // write the output bmp file
+    if(!InputBitmap.write("InputBeforeNDRange.bmp"))
+    {
+        printf("%s: Failed to write output image!\n", __FUNCTION__);
+        return -1;
+    }
+
+    // copy output image data back to original pixel data
+    memcpy(PixelData, OutputDataReadBack, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("OutputBeforeNDRange.bmp"))
+    {
+        printf("%s: Failed to write output image!", __FUNCTION__);
+        return -1;
+    }
+
+	free(InputDataReadBack);
+	free(OutputDataReadBack);
 #endif
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     size_t globalThreads[] = {Width/2, Height};
     size_t localThreads[] = {BlockSize[0], BlockSize[1]};
@@ -436,8 +518,8 @@ Recompute(void)
 #if (DEBUG_INFO)
 	if(FrameCount <= 1)
 		printf("Global[%4d %4d] Local[%4d %4d]\n", 
-			(int)global[0], (int)global[1],
-			(int)local[0], (int)local[1]);
+			(int)globalThreads[0], (int)globalThreads[1],
+			(int)localThreads[0], (int)localThreads[1]);
 #endif
 
 	err = clEnqueueNDRangeKernel(ComputeCommands, ComputeKernel, 2, NULL, globalThreads, localThreads, 0, NULL, NULL);
@@ -447,9 +529,56 @@ Recompute(void)
 		return err;
 	}
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#if (DEBUG_INFO)
+	glFinish();
+
+	cl_uchar4 *InputDataReadBack1 = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+	cl_uchar4 *OutputDataReadBack2 = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeInputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, InputDataReadBack1, 0, NULL, NULL);      
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to read input image buffer! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
+
+	err = clEnqueueReadBuffer(ComputeCommands, ComputeOutputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, OutputDataReadBack2, 0, NULL, NULL);      
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to read output image buffer! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
+
+    // copy output image data back to original pixel data
+    memcpy(PixelData, InputDataReadBack1, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("InputAfterNDRange.bmp"))
+    {
+        printf("%s: Failed to write output image!\n", __FUNCTION__);
+        return -1;
+    }
+
+    // copy output image data back to original pixel data
+    memcpy(PixelData, OutputDataReadBack2, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("OutputAfterNDRange.bmp"))
+    {
+        printf("%s: Failed to write output image!", __FUNCTION__);
+        return -1;
+    }
+
+	free(InputDataReadBack1);
+	free(OutputDataReadBack2);
+#endif
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #if (USE_GL_ATTACHMENTS)
 
-	// Return control to GL context, data already in texture
+	// Return control to GL context, data already in texture object
 	err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
 	if (err != CL_SUCCESS)
 	{
@@ -459,14 +588,18 @@ Recompute(void)
 
 #else
 	// Need to explicitly copy to host side for later rendering
-	err = clEnqueueReadBuffer( ComputeCommands, ComputeOutputImage, CL_TRUE, 0, Width * Height * TextureTypeSize * 4, HostImageBuffer, 0, NULL, NULL );      
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeOutputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, OutputImageData, 0, NULL, NULL);      
 	if (err != CL_SUCCESS)
 	{
-		printf("Failed to read buffer! %d\n", err);
+		printf("Failed to read image! %d\n", err);
 		return EXIT_FAILURE;
 	}
 
 #endif	
+
+	clFinish(ComputeCommands);
+
+	NDRangeCount++;
 
 	return CL_SUCCESS;
 }
@@ -476,16 +609,16 @@ Recompute(void)
 static int 
 CreateComputeBuffers(void)
 {
+	int err = 0;
 
 #if (USE_GL_ATTACHMENTS)
-	int err = 0;
 
 	if(ComputeOutputImage)
 		clReleaseMemObject(ComputeOutputImage);
 	ComputeOutputImage = 0;
 
 	printf("Allocating compute result image in device memory...\n");
-	ComputeOutputImage = clCreateFromGLTexture(ComputeContext, CL_MEM_WRITE_ONLY, TextureTarget, 0, TextureId, &err);
+	ComputeOutputImage = clCreateFromGLTexture(ComputeContext, CL_MEM_READ_WRITE, TextureTarget, 0, TextureId, &err);
 	if (!ComputeOutputImage || err != CL_SUCCESS)
 	{
 		printf("Failed to create OpenGL texture reference! %d\n", err);
@@ -494,18 +627,28 @@ CreateComputeBuffers(void)
 
 #else
 
-	if (HostImageBuffer)
-		free(HostImageBuffer);
+	if(ComputeOutputImage)
+		clReleaseMemObject(ComputeOutputImage);
+	ComputeOutputImage = 0;
 
-	printf("Allocating compute result image in host memory...\n");
-	HostImageBuffer = malloc(TextureWidth * TextureHeight * TextureTypeSize * 4);
-	if(!HostImageBuffer)
+	printf("Allocating compute output image in device memory...\n");
+	ComputeOutputImage = clCreateBuffer(ComputeContext, CL_MEM_READ_WRITE, PixelSize * TextureWidth * TextureHeight, NULL, &err);
+	if (!ComputeOutputImage || err != CL_SUCCESS)
+	{
+		printf("Failed to create OpenGL output buffer! %d\n", err);
+		return -1;
+	}
+
+	if (OutputImageData)
+		free(OutputImageData);
+
+	printf("Allocating compute output image in host memory...\n");
+	OutputImageData = (cl_uchar4 *)calloc(1, TextureWidth * TextureHeight * PixelSize);
+	if(!OutputImageData)
 	{
 		printf("Failed to create host image buffer!\n");
 		return -1;
 	}
-
-	memset(HostImageBuffer, 0, TextureWidth * TextureHeight * TextureTypeSize * 4);
 
 #endif
 
@@ -513,12 +656,87 @@ CreateComputeBuffers(void)
 		clReleaseMemObject(ComputeInputImage);
 	ComputeInputImage = 0;
 
-	ComputeInputImage = clCreateBuffer(ComputeContext, CL_MEM_READ_ONLY, TextureTypeSize * 4 * TextureWidth * TextureHeight, NULL, NULL);
-	if (!ComputeInputImage)
+	printf("Allocating compute input image in host memory...\n");
+	ComputeInputImage = clCreateBuffer(ComputeContext, CL_MEM_READ_ONLY, PixelSize * TextureWidth * TextureHeight, NULL, &err);
+	if (!ComputeInputImage || err != CL_SUCCESS)
 	{
-		printf("Failed to create OpenCL array!\n");
+		printf("Failed to create OpenCL input buffer!\n");
 		return -1;
 	}
+
+	printf("Sending data to input image buffer in device memory...\n");
+	err = clEnqueueWriteBuffer(ComputeCommands, ComputeInputImage, CL_FALSE, 0, PixelSize * TextureWidth * TextureHeight, InputImageData, 0, NULL, NULL);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to send data to input buffer\n");
+		return -1;
+	}
+
+#if (DEBUG_INFO)
+	glFinish();
+
+#if (USE_GL_ATTACHMENTS)
+	// Get control from GL context
+	err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to acquire GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
+#endif
+
+	cl_uchar4 *InputDataReadBack = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+	cl_uchar4 *OutputDataReadBack = (cl_uchar4 *)calloc(1, PixelSize * TextureWidth *  TextureHeight);
+
+	err = clEnqueueReadBuffer( ComputeCommands, ComputeInputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, InputDataReadBack, 0, NULL, NULL);      
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to read input image buffer! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
+
+	err = clEnqueueReadBuffer(ComputeCommands, ComputeOutputImage, CL_TRUE, 0, PixelSize * TextureWidth *  TextureHeight, OutputDataReadBack, 0, NULL, NULL);      
+	if (err != CL_SUCCESS)
+	{
+		printf("%s: Failed to read output image buffer! %d\n", __FUNCTION__, err);
+		return EXIT_FAILURE;
+	}
+
+    // copy output image data back to original pixel data
+    memcpy(PixelData, InputDataReadBack, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("InputAfterCreateBuffer.bmp"))
+    {
+        printf("%s: Failed to write output image!\n", __FUNCTION__);
+        return -1;
+    }
+
+    // copy output image data back to original pixel data
+    memcpy(PixelData, OutputDataReadBack, Width * Height * PixelSize);
+
+    // write the output bmp file
+    if(!InputBitmap.write("OutputAfterCreateBuffer.bmp"))
+    {
+        printf("%s: Failed to write output image!", __FUNCTION__);
+        return -1;
+    }
+
+	free(InputDataReadBack);
+	free(OutputDataReadBack);
+
+#if (USE_GL_ATTACHMENTS)
+	// Return control to GL context, data already in texture
+	err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeOutputImage, 0, 0, 0);
+	if (err != CL_SUCCESS)
+	{
+		printf("Failed to release GL object! %d\n", err);
+		return EXIT_FAILURE;
+	}
+#endif
+
+	clFinish(ComputeCommands);
+#endif
 
 	return CL_SUCCESS;
 }
@@ -526,199 +744,199 @@ CreateComputeBuffers(void)
 static int 
 SetupComputeDevices(int gpu)
 {
-	int err;
-	size_t returned_size;
-	ComputeDeviceType = gpu ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
+    int err;
+    size_t returned_size;
+    ComputeDeviceType = gpu ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
 
 #if (USE_GL_ATTACHMENTS)
 
-	printf(SEPARATOR);
-	printf("Using active OpenGL context...\n");
+    printf(SEPARATOR);
+    printf("Using active OpenGL context...\n");
 
     // Bind to platform
-	cl_platform_id platform_id;
+    cl_platform_id platform_id;
 
-	cl_uint numPlatforms;
-	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
-	if (status != CL_SUCCESS)
-	{
-		printf("clGetPlatformIDs Failed\n");
-		return EXIT_FAILURE;
-	}
+    cl_uint numPlatforms;
+    cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+    if (status != CL_SUCCESS)
+    {
+        printf("clGetPlatformIDs Failed\n");
+        return EXIT_FAILURE;
+    }
 
-	if (0 < numPlatforms)
-	{
-		cl_platform_id* platforms = calloc(numPlatforms, sizeof(cl_platform_id));
+    if (0 < numPlatforms)
+    {
+        cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
 
-		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+        status = clGetPlatformIDs(numPlatforms, platforms, NULL);
 
-		char platformName[100];
-		for (unsigned i = 0; i < numPlatforms; ++i)
-		{
-			status = clGetPlatformInfo(platforms[i],
-				CL_PLATFORM_VENDOR,
-				sizeof(platformName),
-				platformName,
-				NULL);
-			platform_id = platforms[i];
-			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
-			{
-				break;
-			}
-		}
-		printf("Platform found : %s\n", platformName);
-		free(platforms);
-	}
-	if(NULL == platform_id)
-	{
-		printf("NULL platform found so Exiting Application.\n");
-		return EXIT_FAILURE;
-	}
+        char platformName[100];
+        for (unsigned i = 0; i < numPlatforms; ++i)
+        {
+            status = clGetPlatformInfo(platforms[i],
+                CL_PLATFORM_VENDOR,
+                sizeof(platformName),
+                platformName,
+                NULL);
+            platform_id = platforms[i];
+            if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+            {
+                break;
+            }
+        }
+        printf("Platform found : %s\n", platformName);
+        free(platforms);
+    }
+    if(NULL == platform_id)
+    {
+        printf("NULL platform found so Exiting Application.\n");
+        return EXIT_FAILURE;
+    }
 
     // Get ID for the device
-	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
-	if (err != CL_SUCCESS)
-	{
-		printf("Error: Failed to locate compute device!\n");
-		return EXIT_FAILURE;
-	}
+    err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+    if (err != CL_SUCCESS)
+    {
+        printf("Error: Failed to locate compute device!\n");
+        return EXIT_FAILURE;
+    }
 
     // Create a context  
-	cl_context_properties properties[] =
-	{
-		CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
-		CL_GLX_DISPLAY_KHR, (cl_context_properties)glXGetCurrentDisplay(),
-		CL_CONTEXT_PLATFORM, (cl_context_properties)(platform_id),
-		0
-	};
+    cl_context_properties properties[] =
+    {
+        CL_GL_CONTEXT_KHR, (cl_context_properties)glXGetCurrentContext(),
+        CL_GLX_DISPLAY_KHR, (cl_context_properties)glXGetCurrentDisplay(),
+        CL_CONTEXT_PLATFORM, (cl_context_properties)(platform_id),
+        0
+    };
 
     // Create a context from a CGL share group
     //
-	ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
-	if (!ComputeContext)
-	{
-		printf("Error: Failed to create a compute context!\n");
-		return EXIT_FAILURE;
-	}
+    ComputeContext = clCreateContext(properties, 1, &ComputeDeviceId, NULL, 0, 0);
+    if (!ComputeContext)
+    {
+        printf("Error: Failed to create a compute context!\n");
+        return EXIT_FAILURE;
+    }
 
 #else
 
     // Bind to platform
-	cl_platform_id platform_id;
+    cl_platform_id platform_id;
 
-	cl_uint numPlatforms;
-	cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
-	if (status != CL_SUCCESS)
-	{
-		printf("clGetPlatformIDs Failed\n");
-		return EXIT_FAILURE;
-	}
+    cl_uint numPlatforms;
+    cl_int status = clGetPlatformIDs(0, NULL, &numPlatforms);
+    if (status != CL_SUCCESS)
+    {
+        printf("clGetPlatformIDs Failed\n");
+        return EXIT_FAILURE;
+    }
 
-	if (0 < numPlatforms)
-	{
-		cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
+    if (0 < numPlatforms)
+    {
+        cl_platform_id* platforms = (cl_platform_id*)calloc(numPlatforms, sizeof(cl_platform_id));
 
-		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+        status = clGetPlatformIDs(numPlatforms, platforms, NULL);
 
-		char platformName[100];
-		for (unsigned i = 0; i < numPlatforms; ++i)
-		{
-			status = clGetPlatformInfo(platforms[i],
-				CL_PLATFORM_VENDOR,
-				sizeof(platformName),
-				platformName,
-				NULL);
-			platform_id = platforms[i];
-			if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
-			{
-				break;
-			}
-		}
-		printf("Platform found : %s\n", platformName);
-		free(platforms);
-	}
-	if(NULL == platform_id)
-	{
-		printf("NULL platform found so Exiting Application.\n");
-		return EXIT_FAILURE;
-	}
+        char platformName[100];
+        for (unsigned i = 0; i < numPlatforms; ++i)
+        {
+            status = clGetPlatformInfo(platforms[i],
+                CL_PLATFORM_VENDOR,
+                sizeof(platformName),
+                platformName,
+                NULL);
+            platform_id = platforms[i];
+            if (!strcmp(platformName, "Advanced Micro Devices, Inc."))
+            {
+                break;
+            }
+        }
+        printf("Platform found : %s\n", platformName);
+        free(platforms);
+    }
+    if(NULL == platform_id)
+    {
+        printf("NULL platform found so Exiting Application.\n");
+        return EXIT_FAILURE;
+    }
 
     // Get ID for the device
-	err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
-	if (err != CL_SUCCESS)
-	{
-		printf("Error: Failed to locate compute device!\n");
-		return EXIT_FAILURE;
-	}
+    err = clGetDeviceIDs(platform_id, ComputeDeviceType, 1, &ComputeDeviceId, NULL);
+    if (err != CL_SUCCESS)
+    {
+        printf("Error: Failed to locate compute device!\n");
+        return EXIT_FAILURE;
+    }
 
     // Create a context containing the compute device(s)
     //
-	ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
-	if (!ComputeContext)
-	{
-		printf("Error: Failed to create a compute context!\n");
-		return EXIT_FAILURE;
-	}
+    ComputeContext = clCreateContext(0, 1, &ComputeDeviceId, NULL, NULL, &err);
+    if (!ComputeContext)
+    {
+        printf("Error: Failed to create a compute context!\n");
+        return EXIT_FAILURE;
+    }
 
 #endif
 
-	unsigned int device_count;
-	cl_device_id device_ids[16];
+    unsigned int device_count;
+    cl_device_id device_ids[16];
 
-	err = clGetContextInfo(ComputeContext, CL_CONTEXT_DEVICES, sizeof(device_ids), device_ids, &returned_size);
-	if(err)
-	{
-		printf("Error: Failed to retrieve compute devices for context!\n");
-		return EXIT_FAILURE;
-	}
+    err = clGetContextInfo(ComputeContext, CL_CONTEXT_DEVICES, sizeof(device_ids), device_ids, &returned_size);
+    if(err)
+    {
+        printf("Error: Failed to retrieve compute devices for context!\n");
+        return EXIT_FAILURE;
+    }
 
-	device_count = returned_size / sizeof(cl_device_id);
+    device_count = returned_size / sizeof(cl_device_id);
 
-	unsigned int i = 0;
-	int device_found = 0;
-	cl_device_type device_type; 
-	for(i = 0; i < device_count; i++) 
-	{
-		clGetDeviceInfo(device_ids[i], CL_DEVICE_TYPE, sizeof(cl_device_type), &device_type, NULL);
-		if(device_type == ComputeDeviceType) 
-		{
-			ComputeDeviceId = device_ids[i];
-			device_found = 1;
-			break;
-		}   
-	}
+    unsigned int i = 0;
+    int device_found = 0;
+    cl_device_type device_type; 
+    for(i = 0; i < device_count; i++) 
+    {
+        clGetDeviceInfo(device_ids[i], CL_DEVICE_TYPE, sizeof(cl_device_type), &device_type, NULL);
+        if(device_type == ComputeDeviceType) 
+        {
+            ComputeDeviceId = device_ids[i];
+            device_found = 1;
+            break;
+        } 
+    }
 
-	if(!device_found)
-	{
-		printf("Error: Failed to locate compute device!\n");
-		return EXIT_FAILURE;
-	}
+    if(!device_found)
+    {
+        printf("Error: Failed to locate compute device!\n");
+        return EXIT_FAILURE;
+    }
 
     // Create a command queue
     //
-	ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
-	if (!ComputeCommands)
-	{
-		printf("Error: Failed to create a command queue!\n");
-		return EXIT_FAILURE;
-	}
+    ComputeCommands = clCreateCommandQueue(ComputeContext, ComputeDeviceId, 0, &err);
+    if (!ComputeCommands)
+    {
+        printf("Error: Failed to create a command queue!\n");
+        return EXIT_FAILURE;
+    }
 
     // Report the device vendor and device name
     // 
-	cl_char vendor_name[1024] = {0};
-	cl_char device_name[1024] = {0};
-	err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
-	err|= clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_NAME, sizeof(device_name), device_name, &returned_size);
-	if (err != CL_SUCCESS)
-	{
-		printf("Error: Failed to retrieve device info!\n");
-		return EXIT_FAILURE;
-	}
+    cl_char vendor_name[1024] = {0};
+    cl_char device_name[1024] = {0};
+    err = clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_VENDOR, sizeof(vendor_name), vendor_name, &returned_size);
+    err|= clGetDeviceInfo(ComputeDeviceId, CL_DEVICE_NAME, sizeof(device_name), device_name, &returned_size);
+    if (err != CL_SUCCESS)
+    {
+        printf("Error: Failed to retrieve device info!\n");
+        return EXIT_FAILURE;
+    }
 
-	printf(SEPARATOR);
-	printf("Connecting to %s %s...\n", vendor_name, device_name);
+    printf(SEPARATOR);
+    printf("Connecting to %s %s...\n", vendor_name, device_name);
 
-	return CL_SUCCESS;
+    return CL_SUCCESS;
 }
 
 static int 
@@ -813,7 +1031,6 @@ SetupComputeKernel(void)
 		return EXIT_FAILURE;
 	}
 
-
     // Create the compute kernel from within the program
     //
 	printf("Creating kernel '%s'...\n", COMPUTE_KERNEL_METHOD_NAME);    
@@ -887,6 +1104,15 @@ Shutdown(void)
 static int 
 SetupGraphics(void)
 {
+    GLenum GlewInitResult;
+
+    GlewInitResult = glewInit();
+    if (GlewInitResult != GLEW_OK)
+    {
+        fprintf(stderr, "ERROR: %s\n", glewGetErrorString(GlewInitResult));
+        exit(1);
+    }
+
 	CreateTexture(Width, Height);
 
 	glClearColor (0.0, 0.0, 0.0, 0.0);
@@ -1020,12 +1246,13 @@ Display_(void)
 	FrameCount++;
 	uint64_t uiStartTime = GetCurrentTime();
 
-	glClearColor (0.0, 0.0, 0.0, 0.0);
-	glClear (GL_COLOR_BUFFER_BIT);
-
 	if(Animated)
 	{
-
+		if (VarFactor == 100)
+			Incre = -2;
+		else if (VarFactor == 20)
+			Incre = 2;
+		VarFactor += Incre;
 	}
 
 	int err = Recompute();
@@ -1035,7 +1262,7 @@ Display_(void)
 		exit(1);
 	}
 
-	RenderTexture(HostImageBuffer);
+	RenderTexture(OutputImageData);
 	ReportInfo();
 
     glFinish(); // for timing
@@ -1043,6 +1270,7 @@ Display_(void)
     uint64_t uiEndTime = GetCurrentTime();
     ReportStats(uiStartTime, uiEndTime);
     DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+    WriteOutputImage(OUTPUT_IMAGE);
     glutSwapBuffers();
 }
 
@@ -1126,11 +1354,14 @@ int main(int argc, char** argv)
 		if(!argv[i])
 			continue;
 
-		if(strstr(argv[i], "-cpu"))
-			use_gpu = 0;        
+        if(strstr(argv[i], "-cpu"))
+            use_gpu = 0;        
 
-		else if(strstr(argv[i], "-gpu"))
-			use_gpu = 1;
+        else if(strstr(argv[i], "-gpu"))
+            use_gpu = 1;
+
+        else if(strstr(argv[i], "-animate"))
+            Animated = 1;
 
 		else if(strstr(argv[i], "-output"))
 		{

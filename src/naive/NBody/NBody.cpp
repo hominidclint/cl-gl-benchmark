@@ -45,7 +45,8 @@ static GLuint                            GLProgramID;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-FILE *fp;
+static FILE                              *fp;
+static int EnableOutput                  = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -63,7 +64,7 @@ const char *VertexShaderSource =
 "void main(void)\n"
 "{\n"
 "   if ( curBufIdx == 0 )\n"
-"     gl_Position = vec4((pos0.x - 25) / 40, (pos0.y - 30) / 40 , 1.0, 1.0);\n"
+"     gl_Position = vec4((pos0.x - 25) / 40, (pos0.y - 30) / 40, 1.0, 1.0);\n"
 "   else\n"
 "     gl_Position = vec4((pos1.x - 25) / 40, (pos1.y - 30) / 40, 1.0, 1.0);\n"
 "   ex_Color = vec4(1.0, 1.0, 1.0, 1.0);\n"
@@ -111,6 +112,7 @@ static float delT                       = 0.005f;
 static float espSqr                     = 500.0f;
 
 static int GroupSize                    = 128;
+static int MaxNDRange                   = 0x7FFFFFFF;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -128,10 +130,10 @@ static char StatsString[512]            = "\0";
 static uint ShowInfo                    = 1;
 static char InfoString[512]             = "\0";
 
-// static float VertexPos[4][2]            = { { -1.0f, -1.0f },
-// { +1.0f, -1.0f },
-// { +1.0f, +1.0f },
-// { -1.0f, +1.0f } };
+////////////////////////////////////////////////////////////////////////////////
+
+// Forward declareation
+static void Cleanup();
 
 ////////////////////////////////////////////////////////////////////////////////
 static long
@@ -276,7 +278,7 @@ RandomFloat(float randMax, float randMin)
 static int 
 InitData()
 {
-	// make sure DataParticleCount is multiple of group size
+    // make sure DataParticleCount is multiple of group size
 	DataParticleCount = DataParticleCount < GroupSize ? GroupSize :
 	DataParticleCount;
 	DataParticleCount = (DataParticleCount / GroupSize) * GroupSize;
@@ -287,18 +289,18 @@ InitData()
 		free(DataInput);
 	DataInput = (float *)calloc(1, DataBodyCount * sizeof(cl_float4));
 
-	// initialization of inputs
+    // initialization of inputs
 	for(int i = 0; i < DataBodyCount; ++i)
 	{
 		int index = 4 * i;
 
-		// First 3 values are position in x,y and z direction
+        // First 3 values are position in x,y and z direction
 		for(int j = 0; j < 3; ++j)
 		{
 			DataInput[index + j] = RandomFloat(3, 50);
 		}
 
-		// Mass value
+        // Mass value
 		DataInput[index + 3] = RandomFloat(1, 1000);
 	}
 
@@ -333,7 +335,7 @@ CreateGLResouce()
 {
 	GLint bsize;
 
-	// VAO
+    // VAO
 	glGenVertexArrays(1, &VaoID);
 	glBindVertexArray(VaoID);
 	if (!VaoID)
@@ -342,7 +344,7 @@ CreateGLResouce()
 		return -1;
 	}
 
-	// VBOPOS0
+    // VBOPOS0
 	if (VboPosID[0])
 		glDeleteBuffers(1, &VboPosID[0]);
 	glGenBuffers(1, &VboPosID[0]);
@@ -356,13 +358,13 @@ CreateGLResouce()
 	glVertexAttribPointer(VboPosLoc[0], 4, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(VboPosLoc[0]);
 
-	// recheck the size of the created buffer to make sure its what we requested
+    // recheck the size of the created buffer to make sure its what we requested
 	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize); 
 	if ((GLuint)bsize != 4 * sizeof(float) * DataBodyCount) {
 		printf("Vertex Buffer object (%d) has incorrect size (%d).\n", VboPosID[0], bsize);
 	}
 
-	// VBOPOS1
+    // VBOPOS1
 	if (VboPosID[1])
 		glDeleteBuffers(1, &VboPosID[1]);
 	glGenBuffers(1, &VboPosID[1]);
@@ -376,7 +378,7 @@ CreateGLResouce()
 	glVertexAttribPointer(VboPosLoc[1], 4, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(VboPosLoc[1]);
 
-	// recheck the size of the created buffer to make sure its what we requested
+    // recheck the size of the created buffer to make sure its what we requested
 	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize); 
 	if ((GLuint)bsize != 4 * sizeof(float) * DataBodyCount) {
 		printf("Vertex Buffer object (%d) has incorrect size (%d).\n", VboPosID[1], bsize);
@@ -398,6 +400,13 @@ Recompute(void)
 {
 	if(!ComputeKernel)
 		return CL_SUCCESS;
+
+	if (NDRangeCount > MaxNDRange)
+	{
+		printf("Reach Max NDRange, Quitting\n");
+		Cleanup();
+		exit(0);
+	}
 
 	int err = 0;
 
@@ -569,10 +578,10 @@ Recompute(void)
 		clFinish(ComputeCommands);
 	}
 
-	// Notify GL side which attribute index is using
+    // Notify GL side which attribute index is using
 	glUniform1i(UniformCurBufIdxLocation, nextBuffer);
 
-	// Switch buffers
+    // Switch buffers
 	CurrentBuffer = nextBuffer;
 
 	return CL_SUCCESS;
@@ -587,10 +596,10 @@ CreateComputeResource(void)
 
 #if (USE_GL_ATTACHMENTS)
 
-	// CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
-	// Updating VBO or associated CL Buffer affects both CL and GL.
+    // CL Context is created from GL context, GL VBOs and CL Buffers point to the same data in GPU memory
+    // Updating VBO or associated CL Buffer affects both CL and GL.
 
-	// CL buffer Pos 0
+    // CL buffer Pos 0
 	if(ComputePosBuffer[0])
 		clReleaseMemObject(ComputePosBuffer[0]);
 	ComputePosBuffer[0] = 0;
@@ -611,7 +620,7 @@ CreateComputeResource(void)
 		return -1;
 	}
 
-	// CL buffer Pos 1
+    // CL buffer Pos 1
 	if(ComputePosBuffer[1])
 		clReleaseMemObject(ComputePosBuffer[1]);
 	ComputePosBuffer[1] = 0;
@@ -663,7 +672,7 @@ CreateComputeResource(void)
 
 #endif
 
-	// Velocity buffer 0
+    // Velocity buffer 0
 	if(ComputeVelBuffer[0])
 		clReleaseMemObject(ComputeVelBuffer[0]);
 	ComputeVelBuffer[0] = 0;
@@ -677,7 +686,7 @@ CreateComputeResource(void)
 		return -1;
 	}
 
-	// Velocity buffer 1
+    // Velocity buffer 1
 	if(ComputeVelBuffer[1])
 		clReleaseMemObject(ComputeVelBuffer[1]);
 	ComputeVelBuffer[1] = 0;
@@ -691,7 +700,7 @@ CreateComputeResource(void)
 		return -1;
 	}
 
-	// Initialize the velocity buffer to zero
+    // Initialize the velocity buffer to zero
 	float* p = (float*) clEnqueueMapBuffer(ComputeCommands, ComputeVelBuffer[0], CL_TRUE,
 		CL_MAP_WRITE
 		, 0, 4 * sizeof(float) * DataBodyCount, 0, NULL, NULL, &err);
@@ -1048,7 +1057,7 @@ SetupComputeKernel(void)
 
 	printf(SEPARATOR);
 
-	// Setup several arguments that won't change
+    // Setup several arguments that won't change
     // DataBodyCount
 	err = clSetKernelArg(
 		ComputeKernel,
@@ -1114,7 +1123,9 @@ Cleanup(void)
 
 static void
 Shutdown(void)
-{   fclose(fp);
+{   
+	if(fp)
+		fclose(fp);
 	printf(SEPARATOR);
 	printf("Shutting down...\n");
 	Cleanup();
@@ -1246,7 +1257,8 @@ ReportStats(
 			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
 		glutSetWindowTitle(StatsString);
-		fprintf(fp,"%s", StatsString);
+		if (EnableOutput)
+			fprintf(fp,"%s", StatsString);
 		FrameCount = 0;
 		TimeElapsed = 0;
 	}    
@@ -1272,16 +1284,16 @@ Display_(void)
 
 	}
 
-	// glBindVertexArray(VaoID);
+    // glBindVertexArray(VaoID);
 	glDrawArrays(GL_POINTS, 0, DataBodyCount);
 	ReportInfo();
 
-	glFinish(); // for timing
+    glFinish(); // for timing
 
-	uint64_t uiEndTime = GetCurrentTime();
-	ReportStats(uiStartTime, uiEndTime);
-	DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
-	glutSwapBuffers();
+    uint64_t uiEndTime = GetCurrentTime();
+    ReportStats(uiStartTime, uiEndTime);
+    DrawText(TextOffset[0], TextOffset[1], 1, (Animated == 0) ? "Press space to animate" : " ");
+    glutSwapBuffers();
 }
 
 static void 
@@ -1355,9 +1367,19 @@ int main(int argc, char** argv)
 
 		else if(strstr(argv[i], "gpu"))
 			use_gpu = 1;
+
+		else if(strstr(argv[i], "animate"))
+			Animated = 1;
+
+		else if(strstr(argv[i], "output"))
+			EnableOutput = 1;
+
+		else if(strstr(argv[i], "maxframe"))
+			MaxNDRange = atoi(argv[i+1]);
 	}
 
-	fp = fopen("fft_res", "w+");
+	if (EnableOutput)
+		fp = fopen("fft_res", "w+");
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
 	glutInitWindowSize (WindowWidth, WindowHeight);

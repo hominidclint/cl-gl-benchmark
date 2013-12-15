@@ -45,7 +45,8 @@ static GLuint                            GLProgramID;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-FILE *fp;
+static FILE                              *fp;
+static int EnableOutput                  = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -63,7 +64,7 @@ const char *VertexShaderSource =
 "void main(void)\n"
 "{\n"
 "   if ( curBufIdx == 0 )\n"
-"     gl_Position = vec4((pos0.x - 25) / 40, (pos0.y - 30) / 40 , 1.0, 1.0);\n"
+"     gl_Position = vec4((pos0.x - 25) / 40, (pos0.y - 30) / 40, 1.0, 1.0);\n"
 "   else\n"
 "     gl_Position = vec4((pos1.x - 25) / 40, (pos1.y - 30) / 40, 1.0, 1.0);\n"
 "   ex_Color = vec4(1.0, 1.0, 1.0, 1.0);\n"
@@ -111,6 +112,7 @@ static float delT                       = 0.005f;
 static float espSqr                     = 500.0f;
 
 static int GroupSize                    = 128;
+static int MaxNDRange                   = 0x7FFFFFFF;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -128,10 +130,10 @@ static char StatsString[512]            = "\0";
 static uint ShowInfo                    = 1;
 static char InfoString[512]             = "\0";
 
-// static float VertexPos[4][2]            = { { -1.0f, -1.0f },
-// { +1.0f, -1.0f },
-// { +1.0f, +1.0f },
-// { -1.0f, +1.0f } };
+////////////////////////////////////////////////////////////////////////////////
+
+// Forward declareation
+static void Cleanup();
 
 ////////////////////////////////////////////////////////////////////////////////
 static long
@@ -398,6 +400,13 @@ Recompute(void)
 {
     if(!ComputeKernel)
         return CL_SUCCESS;
+
+    if (NDRangeCount > MaxNDRange)
+    {
+        printf("Reach Max NDRange, Quitting\n");
+        Cleanup();
+        exit(0);
+    }
 
     int err = 0;
 
@@ -1114,7 +1123,9 @@ Cleanup(void)
 
 static void
 Shutdown(void)
-{   fclose(fp);
+{   
+    if(fp)
+        fclose(fp);
     printf(SEPARATOR);
     printf("Shutting down...\n");
     Cleanup();
@@ -1246,7 +1257,8 @@ ReportStats(
             fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
         glutSetWindowTitle(StatsString);
-        fprintf(fp,"%s", StatsString);
+        if (EnableOutput)
+            fprintf(fp,"%s", StatsString);
         FrameCount = 0;
         TimeElapsed = 0;
     }    
@@ -1350,14 +1362,24 @@ int main(int argc, char** argv)
         if(!argv[i])
             continue;
 
-        if(strstr(argv[i], "cpu"))
+        if(strstr(argv[i], "-cpu"))
             use_gpu = 0;        
 
-        else if(strstr(argv[i], "gpu"))
+        else if(strstr(argv[i], "-gpu"))
             use_gpu = 1;
+
+        else if(strstr(argv[i], "-animate"))
+            Animated = 1;
+
+        else if(strstr(argv[i], "-output"))
+            EnableOutput = 1;
+
+        else if(strstr(argv[i], "-maxframe"))
+            MaxNDRange = atoi(argv[i+1]);
     }
 
-    fp = fopen("fft_res", "w+");
+    if (EnableOutput)
+        fp = fopen("fft_res", "w+");
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize (WindowWidth, WindowHeight);
@@ -1378,3 +1400,4 @@ int main(int argc, char** argv)
 
     return 0;
 }
+

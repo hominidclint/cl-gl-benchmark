@@ -53,6 +53,8 @@ static int                              WorkGroupItems = 32;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+static int MaxNDRange                   = 0x7FFFFFFF;
+
 static int Width0                       = 512;
 static int Height0                      = 512;
 static int Width1                       = 512;
@@ -86,6 +88,7 @@ static void* HostImageBuffer            = 0;
 
 static double TimeElapsed               = 0;
 static int FrameCount                   = 0;
+static int NDRangeCount                 = 0;
 static uint ReportStatsInterval         = 30;
 
 static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -105,7 +108,16 @@ static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
 
-FILE *fp;// Output file
+FILE *fp;
+static int EnableOutput                  = 0;
+static int EnableStideExec               = 0;
+static int ExecutionCount                = 0;
+static int ExecuteStride                 = 0;
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Forward declareation
+static void Cleanup();
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -345,6 +357,19 @@ Recompute(void)
 	if(!ComputeKernel || !ComputeMatrixC)
 		return CL_SUCCESS;
 
+    if (NDRangeCount > MaxNDRange)
+    {
+        printf("Reach Max NDRange, Quitting\n");
+        Cleanup();
+        exit(0);
+    }
+
+    if ( EnableStideExec && (ExecutionCount / ExecuteStride) % 2 == 1)
+    {
+        printf("GL only for frame %d\n", ExecutionCount);
+        return CL_SUCCESS;
+    }
+
 	void *values[5];
 	size_t sizes[5];
 	size_t global[2];
@@ -451,9 +476,9 @@ static int
 CreateComputeResource(void)
 {
 
-	cl_int err;
-	
+
 #if (USE_GL_ATTACHMENTS)
+	int err;
 
 	if(ComputeImage)
 		clReleaseMemObject(ComputeImage);
@@ -838,8 +863,9 @@ Cleanup(void)
 
 static void
 Shutdown(void)
-{
-	fclose(fp);
+{	
+	if (fp)
+		fclose(fp);
 	printf(SEPARATOR);
 	printf("Shutting down...\n");
 	Cleanup();
@@ -962,7 +988,6 @@ static void
 ReportStats(
 	uint64_t uiStartTime, uint64_t uiEndTime)
 {
-
 	TimeElapsed += SubtractTime(uiEndTime, uiStartTime);
 
 	if(TimeElapsed && FrameCount && FrameCount > (int)ReportStatsInterval) 
@@ -975,7 +1000,8 @@ ReportStats(
 			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
 		glutSetWindowTitle(StatsString);
-		fprintf(fp, "%s", StatsString);
+		if (fp)
+			fprintf(fp, "%s", StatsString);
 		FrameCount = 0;
 		TimeElapsed = 0;
 	}    
@@ -985,9 +1011,8 @@ static void
 Display_(void)
 {
 	FrameCount++;
+	ExecutionCount++;
 	uint64_t uiStartTime = GetCurrentTime();
-
-
 
 	glClearColor (0.0, 0.0, 0.0, 0.0);
 	glClear (GL_COLOR_BUFFER_BIT);
@@ -1004,6 +1029,13 @@ Display_(void)
 		printf("Error %d from Recompute!\n", err);
 		exit(1);
 	}
+
+
+    if (EnableStideExec && ((ExecutionCount / ExecuteStride) % 2) == 0)
+    {
+        printf("CL only for frame %d\n", ExecutionCount);
+        return;
+    }
 
 	RenderTexture(HostImageBuffer);
 	ReportInfo();
@@ -1082,17 +1114,34 @@ int main(int argc, char** argv)
 		if(!argv[i])
 			continue;
 
-		if(strstr(argv[i], "cpu"))
+		if(strstr(argv[i], "-cpu"))
 			use_gpu = 0;        
 
-		else if(strstr(argv[i], "gpu"))
+		else if(strstr(argv[i], "-gpu"))
 			use_gpu = 1;
 
-		else if (strstr(argv[i], "lds"))
+		else if (strstr(argv[i], "-lds"))
 			Lds = 1;
-	}
 
-	fp = fopen("mm_res", "w+");
+        else if(strstr(argv[i], "-animate"))
+            Animated = 1;
+
+        else if(strstr(argv[i], "-output"))
+        {
+            EnableOutput = 1;
+            fp = fopen(argv[i+1], "w+");
+        }
+
+        else if(strstr(argv[i], "-maxframe"))
+            MaxNDRange = atoi(argv[i+1]);
+
+        else if(strstr(argv[i], "-stride"))
+        {
+            ExecuteStride = atoi(argv[i+1]);
+            if (ExecuteStride > 0 )
+                EnableStideExec = 1;
+        }		
+	}
 
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);

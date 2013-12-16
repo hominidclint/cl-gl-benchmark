@@ -47,6 +47,9 @@ static GLuint                            GLProgramID;
 
 static FILE                              *fp;
 static int EnableOutput                  = 0;
+static int EnableStideExec               = 0;
+static int ExecutionCount                = 0;
+static int ExecuteStride                 = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -406,6 +409,12 @@ Recompute(void)
         printf("Reach Max NDRange, Quitting\n");
         Cleanup();
         exit(0);
+    }
+
+    if ( EnableStideExec && (ExecutionCount / ExecuteStride) % 2 == 1)
+    {
+    	printf("GL only for frame %d\n", ExecutionCount);
+    	return CL_SUCCESS;
     }
 
     int err = 0;
@@ -1268,6 +1277,7 @@ static void
 Display_(void)
 {
     FrameCount++;
+    ExecutionCount++;
     uint64_t uiStartTime = GetCurrentTime();
 
     glClearColor (0.0, 0.0, 0.0, 0.0);
@@ -1284,7 +1294,12 @@ Display_(void)
 
     }
 
-    // glBindVertexArray(VaoID);
+    if (EnableStideExec && ((ExecutionCount / ExecuteStride) % 2) == 0)
+    {
+    	printf("CL only for frame %d\n", ExecutionCount);
+    	return;
+    }
+
     glDrawArrays(GL_POINTS, 0, DataBodyCount);
     ReportInfo();
 
@@ -1382,6 +1397,13 @@ int main(int argc, char** argv)
 
         else if(strstr(argv[i], "-maxframe"))
             MaxNDRange = atoi(argv[i+1]);
+
+        else if(strstr(argv[i], "-stride"))
+        {
+        	ExecuteStride = atoi(argv[i+1]);
+        	if (ExecuteStride > 0 )
+        		EnableStideExec = 1;
+        }
     }
 
     glutInit(&argc, argv);

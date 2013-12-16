@@ -690,17 +690,6 @@ kfft_pass5(uint me,
     FFT4();
 
     // Save result
-    __global float4 *gp = (__global float4 *)(gr + (me << 2));
-    gp[0*64] = zr0;
-    gp[1*64] = zr1;
-    gp[2*64] = zr2;
-    gp[3*64] = zr3;
-
-    gp = (__global float4 *)(gi + (me << 2));
-    gp[0*64] = zi0;
-    gp[1*64] = zi1;
-    gp[2*64] = zi2;
-    gp[3*64] = zi3;
 }
 
 // Distance between first real element of successive 1K vectors

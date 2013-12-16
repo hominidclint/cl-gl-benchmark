@@ -92,8 +92,8 @@ static int MaxNDRange                   = 0x7FFFFFFF;
 static int Animated                     = 0;
 static int Update                       = 1;
 
-static int Width                        = 128;
-static int Height                       = 128;
+static int Width                        = 512;
+static int Height                       = 512;
 
 static float *DataReal                  = NULL;
 static float *DataImaginary             = NULL;
@@ -1280,6 +1280,12 @@ int main(int argc, char** argv)
 
         else if(strstr(argv[i], "-animate"))
             Animated = 1;
+
+        else if(strstr(argv[i], "-w"))
+            Width = atoi(argv[i+1]);
+
+        else if(strstr(argv[i], "-h"))
+            Height =atoi(argv[i+1]);
 
         else if(strstr(argv[i], "-output"))
         {

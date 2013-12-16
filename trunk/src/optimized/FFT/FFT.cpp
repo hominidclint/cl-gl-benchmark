@@ -87,6 +87,8 @@ static cl_mem                           ComputeInputOutputImaginary;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+static int MaxNDRange                   = 0x7FFFFFFF;
+
 static int Animated                     = 0;
 static int Update                       = 1;
 
@@ -124,6 +126,15 @@ static float VertexPos[4][2]            = { { -1.0f, -1.0f },
 ////////////////////////////////////////////////////////////////////////////////
 
 FILE *fp;
+static int EnableOutput                  = 0;
+static int EnableStideExec               = 0;
+static int ExecutionCount                = 0;
+static int ExecuteStride                 = 0;
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Forward declareation
+static void Cleanup();
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -404,6 +415,19 @@ Recompute(void)
 {
 	if(!ComputeKernel)
 		return CL_SUCCESS;
+
+    if (NDRangeCount > MaxNDRange)
+    {
+        printf("Reach Max NDRange, Quitting\n");
+        Cleanup();
+        exit(0);
+    }
+
+    if (EnableStideExec && (ExecutionCount / ExecuteStride) % 2 == 1)
+    {
+        printf("GL only for frame %d\n", ExecutionCount);
+        return CL_SUCCESS;
+    }
 
 	void *values[2];
 	size_t sizes[2];
@@ -995,6 +1019,8 @@ Cleanup(void)
 static void
 Shutdown(void)
 {
+    if (fp)
+        fclose(fp);
 	printf(SEPARATOR);
 	printf("Shutting down...\n");
 	Cleanup();
@@ -1132,7 +1158,8 @@ ReportStats(
 			fMs, fFps, USE_GL_ATTACHMENTS ? "attached" : "copying");
 
 		glutSetWindowTitle(StatsString);
-		fprintf(fp, "%s\n", StatsString);
+		if (fp)
+			fprintf(fp, "%s\n", StatsString);
 		FrameCount = 0;
 		TimeElapsed = 0;
 	}    
@@ -1142,6 +1169,7 @@ static void
 Display_(void)
 {
 	FrameCount++;
+	ExecutionCount++;
 	uint64_t uiStartTime = GetCurrentTime();
 
 
@@ -1160,6 +1188,12 @@ Display_(void)
 		printf("Error %d from Recompute!\n", err);
 		exit(1);
 	}
+
+    if (EnableStideExec && ((ExecutionCount / ExecuteStride) % 2) == 0)
+    {
+        printf("CL only for frame %d\n", ExecutionCount);
+        return;
+    }
 
 	glDrawArrays(GL_POINTS, 0, DataElemCount / 4);
 	ReportInfo();
@@ -1238,14 +1272,32 @@ int main(int argc, char** argv)
 		if(!argv[i])
 			continue;
 
-		if(strstr(argv[i], "cpu"))
+		if(strstr(argv[i], "-cpu"))
 			use_gpu = 0;        
 
-		else if(strstr(argv[i], "gpu"))
+		else if(strstr(argv[i], "-gpu"))
 			use_gpu = 1;
+
+        else if(strstr(argv[i], "-animate"))
+            Animated = 1;
+
+        else if(strstr(argv[i], "-output"))
+        {
+            EnableOutput = 1;
+            fp = fopen(argv[i+1], "w+");
+        }
+
+        else if(strstr(argv[i], "-maxframe"))
+            MaxNDRange = atoi(argv[i+1]);
+
+        else if(strstr(argv[i], "-stride"))
+        {
+            ExecuteStride = atoi(argv[i+1]);
+            if (ExecuteStride > 0 )
+                EnableStideExec = 1;
+        }		
 	}
 
-	fp = fopen("fft_res", "w+");
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
 	glutInitWindowSize (Width, Height);

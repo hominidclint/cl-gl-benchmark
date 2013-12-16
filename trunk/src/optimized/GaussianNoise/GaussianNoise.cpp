@@ -66,7 +66,6 @@ static cl_mem                           ComputeInputImage;
 static cl_mem                           ComputeOutputImage;
 static size_t                           MaxBlockSize;
 static size_t                           BlockSize[2];
-static unsigned int                     NDRangeCount = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -74,6 +73,8 @@ static int VarFactor                    = FACTOR;
 static int Incre                        = 2;
 
 ////////////////////////////////////////////////////////////////////////////////
+
+static int MaxNDRange                   = 0x7FFFFFFF;
 
 static int Width                        = 0;
 static int Height                       = 0;
@@ -94,6 +95,7 @@ static uint TextureHeight               = 0;
 
 static double TimeElapsed               = 0;
 static int FrameCount                   = 0;
+static int NDRangeCount                 = 0;
 static uint ReportStatsInterval         = 30;
 
 static float ShadowTextColor[4]         = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -113,8 +115,16 @@ static float TexCoords[4][2];
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static int EnableOutput                 = 0;
 FILE *fp;
+static int EnableOutput                  = 0;
+static int EnableStideExec               = 0;
+static int ExecutionCount                = 0;
+static int ExecuteStride                 = 0;
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Forward declareation
+static void Cleanup();
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -474,6 +484,19 @@ Recompute(void)
 
     if(!ComputeKernel || !ComputeOutputImage)
         return CL_SUCCESS;
+
+    if (NDRangeCount > MaxNDRange)
+    {
+        printf("Reach Max NDRange, Quitting\n");
+        Cleanup();
+        exit(0);
+    }
+
+    if ( EnableStideExec && (ExecutionCount / ExecuteStride) % 2 == 1)
+    {
+        printf("GL only for frame %d\n", ExecutionCount);
+        return CL_SUCCESS;
+    }
 
     int err = 0;
 
@@ -1294,6 +1317,7 @@ static void
 Display_(void)
 {
     FrameCount++;
+    ExecutionCount++;
     uint64_t uiStartTime = GetCurrentTime();
 
     if(Animated)
@@ -1310,6 +1334,12 @@ Display_(void)
     {
         printf("Error %d from Recompute!\n", err);
         exit(1);
+    }
+
+    if (EnableStideExec && ((ExecutionCount / ExecuteStride) % 2) == 0)
+    {
+        printf("CL only for frame %d\n", ExecutionCount);
+        return;
     }
 
     RenderTexture(OutputImageData);
@@ -1417,6 +1447,16 @@ int main(int argc, char** argv)
         {
             EnableOutput = 1;
             fp = fopen(argv[i+1], "w+");
+        }
+
+        else if(strstr(argv[i], "-maxframe"))
+            MaxNDRange = atoi(argv[i+1]);
+
+        else if(strstr(argv[i], "-stride"))
+        {
+            ExecuteStride = atoi(argv[i+1]);
+            if (ExecuteStride > 0 )
+                EnableStideExec = 1;
         }
     }
 

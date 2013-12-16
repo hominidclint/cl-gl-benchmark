@@ -79,8 +79,6 @@
 #define COMPUTE_KERNEL_FILENAME         ("Julia_Kernel.cl")
 #define COMPUTE_KERNEL_METHOD_NAME      ("QJuliaKernel")
 #define SEPARATOR                       ("----------------------------------------------------------------------\n")
-#define WIDTH                           (512)
-#define HEIGHT                          (512)
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -100,8 +98,8 @@ static int                              WorkGroupItems = 32;
 
 static int MaxNDRange                   = 0x7FFFFFFF;
 
-static int Width                        = WIDTH;
-static int Height                       = HEIGHT;
+static int Width                        = 512;
+static int Height                       = 512;
 
 static int Animated                     = 0;
 static int Update                       = 1;
@@ -125,8 +123,8 @@ static uint TextureTarget               = GL_TEXTURE_2D;
 static uint TextureInternal             = GL_RGBA;
 static uint TextureFormat               = GL_RGBA;
 static uint TextureType                 = GL_UNSIGNED_BYTE;
-static uint TextureWidth                = WIDTH;
-static uint TextureHeight               = HEIGHT;
+static uint TextureWidth                = 512;
+static uint TextureHeight               = 512;
 static size_t TextureTypeSize           = sizeof(char);
 static uint ActiveTextureUnit           = GL_TEXTURE1_ARB;
 static void* HostImageBuffer            = 0;
@@ -154,10 +152,13 @@ static float TexCoords[4][2];
 ////////////////////////////////////////////////////////////////////////////////
 
 FILE *fp;
+FILE *TexTestResult;
+
 static int EnableOutput                  = 0;
 static int EnableStideExec               = 0;
 static int ExecutionCount                = 0;
 static int ExecuteStride                 = 0;
+static int EnableTexWriteTest            = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -172,7 +173,7 @@ DivideUp(int a, int b)
     return ((a % b) != 0) ? (a / b + 1) : (a / b);
 }
 
-static long
+static long long
 GetCurrentTime()
 {
     struct timeval tv;
@@ -180,11 +181,10 @@ GetCurrentTime()
     gettimeofday(&tv, NULL);
 
     return tv.tv_sec * 1000 + tv.tv_usec/1000.0;
-    // return time(NULL);
 }
 
-static double 
-SubtractTime( long uiEndTime, long uiStartTime )
+static long long 
+SubtractTime( long long uiEndTime, long long uiStartTime )
 {
     return uiEndTime - uiStartTime;
 }
@@ -346,9 +346,70 @@ RenderTexture( void *pvData )
     glEnable( TextureTarget );
     glBindTexture( TextureTarget, TextureId );
 
+    // Following 3 lines of code won't execute for GL-CL shared context
     if(pvData)
         glTexSubImage2D(TextureTarget, 0, 0, 0, TextureWidth, TextureHeight, 
             TextureFormat, TextureType, pvData);
+
+#if (USE_GL_ATTACHMENTS)
+
+    // For testing overhead of wrting to texture from CL/GL side
+    if (EnableTexWriteTest)
+    {
+        // Dummy texture data
+        char *HostRandomImageBuffer = (char *)calloc(1, TextureWidth * TextureHeight * TextureTypeSize * 4);
+
+        long long clTexWriteStart;
+        long long clTexWriteEnd;
+        long long glTexWriteStart;
+        long long glTexWriteEnd;
+
+        // Make sure all GL commands have finished
+        glFinish();
+
+        clTexWriteStart = GetCurrentTime();
+        int err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+        if (err != CL_SUCCESS)
+        {
+            printf("Failed to acquire GL object! %d\n", err);
+            return;
+        }
+
+        size_t origin[] = { 0, 0, 0 };
+        size_t region[] = { TextureWidth, TextureHeight, 1 };
+        err = clEnqueueWriteImage(ComputeCommands, ComputeImage, CL_FALSE, origin, region, 0, 0, HostRandomImageBuffer,
+                                  0, NULL, NULL);
+        if(err != CL_SUCCESS)
+        {
+            printf("Failed to copy image to texture! %d\n", err);
+            return;
+        }
+
+        err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+        if (err != CL_SUCCESS)
+        {
+            printf("Failed to release GL object! %d\n", err);
+            return;
+        }
+
+        clFinish(ComputeCommands);
+        clTexWriteEnd = GetCurrentTime();
+
+        // Make sure no GL command left unfinished
+        glFinish();
+        glTexWriteStart = GetCurrentTime();
+        glTexSubImage2D(TextureTarget, 0, 0, 0, TextureWidth, TextureHeight, 
+            TextureFormat, TextureType, HostRandomImageBuffer);
+        glFinish();
+        glTexWriteEnd = GetCurrentTime();
+
+        fprintf(TexTestResult, "GL[%lld - %lld] %lldms, CL[%lld - %lld] %lldms\n", 
+            glTexWriteStart, glTexWriteEnd, glTexWriteEnd - glTexWriteStart,
+            clTexWriteStart, clTexWriteEnd, clTexWriteEnd - clTexWriteStart);
+        free(HostRandomImageBuffer);
+    }
+
+#endif
 
     glTexParameteri(TextureTarget, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
     glBegin( GL_QUADS );
@@ -557,7 +618,6 @@ CreateComputeResult(void)
     ComputeImage = 0;
 
     printf("Allocating compute result image in device memory...\n");
-    // ComputeImage = clCreateFromGLTexture2D(ComputeContext, CL_MEM_WRITE_ONLY, TextureTarget, 0, TextureId, &err);
     ComputeImage = clCreateFromGLTexture(ComputeContext, CL_MEM_WRITE_ONLY, TextureTarget, 0, TextureId, &err);
     if (!ComputeImage || err != CL_SUCCESS)
     {
@@ -909,6 +969,8 @@ Shutdown(void)
 {
     if (fp)
         fclose(fp);
+    if (TexTestResult)
+        fclose(TexTestResult);
     printf(SEPARATOR);
     printf("Shutting down...\n");
     Cleanup();
@@ -1219,6 +1281,18 @@ int main(int argc, char** argv)
         else if(strstr(argv[i], "-gpu"))
             use_gpu = 1;
 
+        else if(strstr(argv[i], "-w"))
+        {
+            Width = atoi(argv[i+1]);
+            TextureWidth = Width;
+        }
+
+        else if(strstr(argv[i], "-h"))
+        {
+            Height = atoi(argv[i+1]);
+            TextureHeight = Height;
+        }
+
         else if(strstr(argv[i], "-animate"))
             Animated = 1;
 
@@ -1236,6 +1310,12 @@ int main(int argc, char** argv)
             ExecuteStride = atoi(argv[i+1]);
             if (ExecuteStride > 0 )
                 EnableStideExec = 1;
+        }
+
+        else if (strstr(argv[i], "-textest"))
+        {
+            EnableTexWriteTest = 1;
+            TexTestResult = fopen("Julia_TextureWriteTest", "w+");
         }
     }
 

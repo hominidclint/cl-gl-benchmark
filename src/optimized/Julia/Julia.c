@@ -377,6 +377,7 @@ RenderTexture( void *pvData )
     {
         // Make sure all GL commands have finished
         glFinish();
+        clFinish(ComputeCommands);
 
         clTexReadStart = GetCurrentTime();
         err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
@@ -422,6 +423,7 @@ RenderTexture( void *pvData )
     {
         // Make sure all GL commands have finished
         glFinish();
+        clFinish(ComputeCommands);
 
         clTexWriteStart = GetCurrentTime();
         err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
@@ -1380,8 +1382,12 @@ int main(int argc, char** argv)
             EnableTexReadTest = 1;
             TexReadResult = fopen("Julia_TextureReadTest", "w+");
         }
-
     }
+
+    if (EnableTexWriteTest)
+        fprintf(TexWriteResult, "Texture size = %dMB\n", TextureWidth * TextureHeight * TextureTypeSize * 4 / (1024 * 1024));
+    if (EnableTexReadTest)
+        fprintf(TexReadResult, "Texture size = %dMB\n", TextureWidth * TextureHeight * TextureTypeSize * 4 / (1024 * 1024));        
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);

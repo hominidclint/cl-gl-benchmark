@@ -152,13 +152,15 @@ static float TexCoords[4][2];
 ////////////////////////////////////////////////////////////////////////////////
 
 FILE *fp;
-FILE *TexTestResult;
+FILE *TexWriteResult;
+FILE *TexReadResult;
 
 static int EnableOutput                  = 0;
 static int EnableStideExec               = 0;
 static int ExecutionCount                = 0;
 static int ExecuteStride                 = 0;
 static int EnableTexWriteTest            = 0;
+static int EnableTexReadTest            = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -353,9 +355,6 @@ RenderTexture( void *pvData )
 
 #if (USE_GL_ATTACHMENTS)
 
-    // For testing overhead of wrting to texture from CL/GL side
-    if (EnableTexWriteTest)
-    {
         // Dummy texture data
         char *HostRandomImageBuffer = (char *)calloc(1, TextureWidth * TextureHeight * TextureTypeSize * 4);
 
@@ -364,19 +363,74 @@ RenderTexture( void *pvData )
         long long glTexWriteStart;
         long long glTexWriteEnd;
 
+        long long clTexReadStart;
+        long long clTexReadEnd;
+        long long glTexReadStart;
+        long long glTexReadEnd;
+
+        size_t origin[] = { 0, 0, 0 };
+        size_t region[] = { TextureWidth, TextureHeight, 1 };
+
+        int err;
+
+    if (EnableTexReadTest)
+    {
         // Make sure all GL commands have finished
         glFinish();
 
-        clTexWriteStart = GetCurrentTime();
-        int err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+        clTexReadStart = GetCurrentTime();
+        err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
         if (err != CL_SUCCESS)
         {
             printf("Failed to acquire GL object! %d\n", err);
             return;
         }
 
-        size_t origin[] = { 0, 0, 0 };
-        size_t region[] = { TextureWidth, TextureHeight, 1 };
+        err = clEnqueueReadImage(ComputeCommands, ComputeImage, CL_FALSE, origin, region, 0, 0, HostRandomImageBuffer,
+                                  0, NULL, NULL);
+        if(err != CL_SUCCESS)
+        {
+            printf("Failed to read image from texture! %d\n", err);
+            return;
+        }
+
+        err = clEnqueueReleaseGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+        if (err != CL_SUCCESS)
+        {
+            printf("Failed to release GL object! %d\n", err);
+            return;
+        }
+
+        clFinish(ComputeCommands);
+        clTexReadEnd = GetCurrentTime();
+
+        // Make sure no GL command left unfinished
+        glFinish();
+        glTexReadStart = GetCurrentTime();
+        glGetTexImage(TextureTarget, 0, TextureFormat, TextureType, HostRandomImageBuffer);
+        glFinish();
+        glTexReadEnd = GetCurrentTime();
+
+        fprintf(TexReadResult, "Read GL[%lld - %lld] %lldms, CL[%lld - %lld] %lldms\n", 
+            glTexReadStart, glTexReadEnd, glTexReadEnd - glTexReadStart,
+            clTexReadStart, clTexReadEnd, clTexReadEnd - clTexReadStart);
+        
+    }
+
+    // For testing overhead of wrting to texture from CL/GL side
+    if (EnableTexWriteTest)
+    {
+        // Make sure all GL commands have finished
+        glFinish();
+
+        clTexWriteStart = GetCurrentTime();
+        err = clEnqueueAcquireGLObjects(ComputeCommands, 1, &ComputeImage, 0, 0, 0);
+        if (err != CL_SUCCESS)
+        {
+            printf("Failed to acquire GL object! %d\n", err);
+            return;
+        }
+
         err = clEnqueueWriteImage(ComputeCommands, ComputeImage, CL_FALSE, origin, region, 0, 0, HostRandomImageBuffer,
                                   0, NULL, NULL);
         if(err != CL_SUCCESS)
@@ -403,9 +457,10 @@ RenderTexture( void *pvData )
         glFinish();
         glTexWriteEnd = GetCurrentTime();
 
-        fprintf(TexTestResult, "GL[%lld - %lld] %lldms, CL[%lld - %lld] %lldms\n", 
+        fprintf(TexWriteResult, "Write GL[%lld - %lld] %lldms, CL[%lld - %lld] %lldms\n", 
             glTexWriteStart, glTexWriteEnd, glTexWriteEnd - glTexWriteStart,
             clTexWriteStart, clTexWriteEnd, clTexWriteEnd - clTexWriteStart);
+
         free(HostRandomImageBuffer);
     }
 
@@ -969,8 +1024,10 @@ Shutdown(void)
 {
     if (fp)
         fclose(fp);
-    if (TexTestResult)
-        fclose(TexTestResult);
+    if (TexReadResult)
+        fclose(TexReadResult);
+    if (TexWriteResult)
+        fclose(TexWriteResult);
     printf(SEPARATOR);
     printf("Shutting down...\n");
     Cleanup();
@@ -1312,11 +1369,18 @@ int main(int argc, char** argv)
                 EnableStideExec = 1;
         }
 
-        else if (strstr(argv[i], "-textest"))
+        else if (strstr(argv[i], "-texwrite"))
         {
             EnableTexWriteTest = 1;
-            TexTestResult = fopen("Julia_TextureWriteTest", "w+");
+            TexWriteResult = fopen("Julia_TextureWriteTest", "w+");
         }
+
+        else if (strstr(argv[i], "-texread"))
+        {
+            EnableTexReadTest = 1;
+            TexReadResult = fopen("Julia_TextureReadTest", "w+");
+        }
+
     }
 
     glutInit(&argc, argv);
